@@ -1,0 +1,448 @@
+---
+title: "Vectors, Matrices &amp; <em>Operations</em>"
+subtitle: "Lesson 01 gave you the picture. This lesson gives you the machinery — the handful of operations that, chained together, <em>are</em> a neural network layer."
+summary: "This lesson turns the vector intuition from Lesson 01 into the concrete matrix operations that make up a neural network layer. It distinguishes element-wise (Hadamard) multiplication from matrix multiplication — the single most common source of shape bugs in ML code — and covers transpose, the determinant, and when a matrix's inverse exists. Broadcasting is introduced as the rule that lets a single bias vector add cleanly across an entire batch of examples. Everything comes together in a dense layer forward pass, relu(W @ x + b), which the lesson frames as the basic building block behind CNNs, transformers, and diffusion models. Three workbook tasks have you implement and hand-verify Hadamard vs. matmul, determinant/inverse, and a full dense-layer computation."
+phase: "01-math-foundations"
+phaseTitle: "Phase 01 — Math Foundations"
+order: 2
+lessonNumber: 2
+hook: '"Every neural network is just matrix multiplication with extra steps."'
+hookCredit: "— once you can build these operations from scratch, that sentence stops being a joke and starts being a spec"
+sourceUrl: "https://aiengineeringfromscratch.com/lesson?path=phases%2F01-math-foundations%2F02-vectors-matrices-operations"
+---
+
+import Callout from "@florilex/tutorial-kit/components/Callout.astro";
+import Formula from "@florilex/tutorial-kit/components/Formula.astro";
+import DiagramFigure from "@florilex/tutorial-kit/components/DiagramFigure.astro";
+import WorkTask from "@florilex/tutorial-kit/components/WorkTask.astro";
+import Solution from "@florilex/tutorial-kit/components/Solution.astro";
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">1</span><h2 class="sec-title">A matrix is a stack of vectors</h2></div>
+
+You already know a vector like `[3, 4]` is an arrow — magnitude 5, pointing up and to the right. A **matrix** is just several vectors stacked together, row by row or column by column, so you can operate on all of them at once instead of one at a time.
+
+In AI code, that stacking is everywhere: a batch of 32 embeddings is a 32-row matrix; a layer's weights are a matrix that maps an input vector to an output vector; an image is a matrix of pixel intensities. The whole point of learning matrix operations is to stop thinking "loop over vectors" and start thinking "one matrix operation."
+
+Here's the minimal representation we'll build on — no `numpy`, just nested lists, so nothing is hidden:
+
+```python
+class Matrix:
+    def __init__(self, data: list[list[float]]):
+        self.data = data
+        self.rows = len(data)
+        self.cols = len(data[0]) if data else 0
+
+    def shape(self) -> tuple[int, int]:
+        return (self.rows, self.cols)
+
+    def __repr__(self) -> str:
+        return "\n".join(str(row) for row in self.data)
+```
+
+<Callout label="Where this shows up">
+A batch of token embeddings has shape `(batch_size, d_model)`. A weight matrix in a dense layer has shape `(d_in, d_out)`. Every shape mismatch error you'll ever debug in PyTorch is this lesson's rules, enforced by a stricter interpreter.
+</Callout>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">2</span><h2 class="sec-title">Two kinds of "multiply," and they're not interchangeable</h2></div>
+
+This is the single most common source of shape bugs in ML code, so it's worth being pedantic about it. There are two completely different operations that both get called "multiplying matrices":
+
+- **Element-wise (Hadamard) product:** same-shape matrices, multiply position `(i,j)` by position `(i,j)`. Output is the same shape as the inputs.
+- **Matrix multiplication:** row `i` of the left matrix, dot-producted against column `j` of the right matrix, for every `(i,j)`. The inner dimensions have to match, and the output has a *different* shape from either input.
+
+<DiagramFigure caption="Element-wise stays in place, cell by cell. Matmul reaches across a whole row and a whole column to fill one output cell — that's why the shapes work out differently.">
+<svg viewBox="0 0 460 230" role="img" aria-label="Comparison of element-wise multiplication and matrix multiplication: on the left, two same-shaped grids combine cell by cell in place; on the right, a row from the left matrix and a column from the right matrix converge through a dot product into a single output cell.">
+  <text x="115" y="20" font-size="12" fill="var(--ink-faint)" text-anchor="middle">element-wise: same shape in, same shape out</text>
+  <g stroke="var(--line)" stroke-width="1" fill="none">
+    <rect x="20" y="40" width="40" height="40"></rect>
+    <rect x="60" y="40" width="40" height="40"></rect>
+    <rect x="20" y="80" width="40" height="40"></rect>
+    <rect x="60" y="80" width="40" height="40"></rect>
+  </g>
+  <rect x="20" y="40" width="40" height="40" fill="var(--accent-soft)"></rect>
+  <text x="40" y="65" font-size="13" text-anchor="middle" fill="var(--accent)" font-family="ui-monospace, monospace">a</text>
+  <text x="40" y="140" font-size="12" text-anchor="middle" fill="var(--ink-faint)">A</text>
+  <text x="112" y="90" font-size="16" fill="var(--ink-faint)" text-anchor="middle">⊙</text>
+  <g stroke="var(--line)" stroke-width="1" fill="none">
+    <rect x="130" y="40" width="40" height="40"></rect>
+    <rect x="170" y="40" width="40" height="40"></rect>
+    <rect x="130" y="80" width="40" height="40"></rect>
+    <rect x="170" y="80" width="40" height="40"></rect>
+  </g>
+  <rect x="130" y="40" width="40" height="40" fill="var(--accent-soft)"></rect>
+  <text x="150" y="65" font-size="13" text-anchor="middle" fill="var(--accent)" font-family="ui-monospace, monospace">b</text>
+  <text x="150" y="140" font-size="12" text-anchor="middle" fill="var(--ink-faint)">B</text>
+  <text x="192" y="90" font-size="16" fill="var(--ink-faint)" text-anchor="middle">=</text>
+  <g stroke="var(--line)" stroke-width="1" fill="none">
+    <rect x="205" y="40" width="40" height="40"></rect>
+    <rect x="245" y="40" width="40" height="40"></rect>
+    <rect x="205" y="80" width="40" height="40"></rect>
+    <rect x="245" y="80" width="40" height="40"></rect>
+  </g>
+  <rect x="205" y="40" width="40" height="40" fill="var(--accent2-soft)"></rect>
+  <text x="225" y="65" font-size="12" text-anchor="middle" fill="var(--accent-2)" font-family="ui-monospace, monospace">a·b</text>
+  <text x="225" y="140" font-size="12" text-anchor="middle" fill="var(--ink-faint)">C</text>
+  <line x1="300" y1="30" x2="300" y2="200" stroke="var(--line-soft)" stroke-width="1"></line>
+  <text x="380" y="20" font-size="12" fill="var(--ink-faint)" text-anchor="middle">matmul: row · column → one cell</text>
+  <g stroke="var(--line)" stroke-width="1" fill="none">
+    <rect x="320" y="40" width="26" height="26"></rect>
+    <rect x="346" y="40" width="26" height="26"></rect>
+    <rect x="372" y="40" width="26" height="26"></rect>
+    <rect x="320" y="66" width="26" height="26"></rect>
+    <rect x="346" y="66" width="26" height="26"></rect>
+    <rect x="372" y="66" width="26" height="26"></rect>
+  </g>
+  <rect x="320" y="40" width="78" height="26" fill="var(--accent-soft)" opacity="0.8"></rect>
+  <text x="359" y="105" font-size="11" fill="var(--ink-faint)" text-anchor="middle">A (2×3)</text>
+  <g stroke="var(--line)" stroke-width="1" fill="none">
+    <rect x="410" y="40" width="22" height="20"></rect>
+    <rect x="432" y="40" width="22" height="20"></rect>
+    <rect x="410" y="60" width="22" height="20"></rect>
+    <rect x="432" y="60" width="22" height="20"></rect>
+    <rect x="410" y="80" width="22" height="20"></rect>
+    <rect x="432" y="80" width="22" height="20"></rect>
+  </g>
+  <rect x="432" y="40" width="22" height="60" fill="var(--accent2-soft)" opacity="0.8"></rect>
+  <text x="432" y="112" font-size="11" fill="var(--ink-faint)" text-anchor="middle">B (3×2)</text>
+  <g stroke="var(--line)" stroke-width="1" fill="none">
+    <rect x="345" y="150" width="30" height="30"></rect>
+  </g>
+  <rect x="345" y="150" width="30" height="30" fill="var(--ink)" opacity="0.08"></rect>
+  <text x="360" y="169" font-size="11" fill="var(--ink)" text-anchor="middle" font-family="ui-monospace, monospace">C₁₂</text>
+  <text x="360" y="197" font-size="11" fill="var(--ink-faint)" text-anchor="middle">C (2×2)</text>
+  <path d="M359,66 Q359,110 360,150" stroke="var(--accent)" stroke-width="1.5" fill="none" stroke-dasharray="3 3"></path>
+  <path d="M443,100 Q400,130 375,155" stroke="var(--accent-2)" stroke-width="1.5" fill="none" stroke-dasharray="3 3"></path>
+</svg>
+</DiagramFigure>
+
+```python
+def elementwise_add(A: list[list[float]], B: list[list[float]]) -> list[list[float]]:
+    return [[a + b for a, b in zip(row_a, row_b)] for row_a, row_b in zip(A, B)]
+
+def hadamard(A: list[list[float]], B: list[list[float]]) -> list[list[float]]:
+    return [[a * b for a, b in zip(row_a, row_b)] for row_a, row_b in zip(A, B)]
+
+def matmul(A: list[list[float]], B: list[list[float]]) -> list[list[float]]:
+    rows_A, cols_A = len(A), len(A[0])
+    rows_B, cols_B = len(B), len(B[0])
+    assert cols_A == rows_B, f"shape mismatch: {cols_A} != {rows_B}"
+    return [
+        [sum(A[i][k] * B[k][j] for k in range(cols_A)) for j in range(cols_B)]
+        for i in range(rows_A)
+    ]
+```
+
+<Callout label="The bug this prevents" variant="warn">
+If you accidentally reach for element-wise multiply where you needed `matmul` (or vice versa), Python/NumPy will often *not* crash — it'll broadcast or silently produce the wrong shape, and you'll debug a "the model won't learn" issue for an hour before noticing. Naming the two operations differently in your head is the fix.
+</Callout>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">3</span><h2 class="sec-title">Transpose: rows become columns</h2></div>
+
+The transpose of a matrix, written `Mᵀ`, flips it across its diagonal — row `i` becomes column `i`. It doesn't change any of the numbers, only their arrangement.
+
+<DiagramFigure caption="Row 1 of M — [1, 2, 3] — becomes column 1 of Mᵀ. Nothing is recomputed; it's purely rearranged.">
+<svg viewBox="0 0 380 190" role="img" aria-label="A 2 by 3 matrix on the left is transposed into a 3 by 2 matrix on the right, with matching colors showing that each row on the left becomes the corresponding column on the right.">
+  <g font-family="ui-monospace, monospace" font-size="13">
+    <g stroke="var(--line)" stroke-width="1" fill="none">
+      <rect x="20" y="30" width="44" height="36"></rect>
+      <rect x="64" y="30" width="44" height="36"></rect>
+      <rect x="108" y="30" width="44" height="36"></rect>
+      <rect x="20" y="66" width="44" height="36"></rect>
+      <rect x="64" y="66" width="44" height="36"></rect>
+      <rect x="108" y="66" width="44" height="36"></rect>
+    </g>
+    <rect x="20" y="30" width="132" height="36" fill="var(--accent-soft)" opacity="0.6"></rect>
+    <rect x="20" y="66" width="132" height="36" fill="var(--accent2-soft)" opacity="0.6"></rect>
+    <text x="42" y="53" text-anchor="middle" fill="var(--ink)">1</text>
+    <text x="86" y="53" text-anchor="middle" fill="var(--ink)">2</text>
+    <text x="130" y="53" text-anchor="middle" fill="var(--ink)">3</text>
+    <text x="42" y="89" text-anchor="middle" fill="var(--ink)">4</text>
+    <text x="86" y="89" text-anchor="middle" fill="var(--ink)">5</text>
+    <text x="130" y="89" text-anchor="middle" fill="var(--ink)">6</text>
+    <text x="86" y="120" font-family="Seravek, sans-serif" font-size="12" text-anchor="middle" fill="var(--ink-faint)">M (2×3)</text>
+  </g>
+  <text x="185" y="65" font-size="18" fill="var(--ink-faint)" text-anchor="middle">→</text>
+  <text x="185" y="82" font-size="11" fill="var(--ink-faint)" text-anchor="middle">Mᵀ</text>
+  <g font-family="ui-monospace, monospace" font-size="13">
+    <g stroke="var(--line)" stroke-width="1" fill="none">
+      <rect x="220" y="20" width="44" height="36"></rect>
+      <rect x="264" y="20" width="44" height="36"></rect>
+      <rect x="220" y="56" width="44" height="36"></rect>
+      <rect x="264" y="56" width="44" height="36"></rect>
+      <rect x="220" y="92" width="44" height="36"></rect>
+      <rect x="264" y="92" width="44" height="36"></rect>
+    </g>
+    <rect x="220" y="20" width="44" height="108" fill="var(--accent-soft)" opacity="0.6"></rect>
+    <rect x="264" y="20" width="44" height="108" fill="var(--accent2-soft)" opacity="0.6"></rect>
+    <text x="242" y="43" text-anchor="middle" fill="var(--ink)">1</text>
+    <text x="286" y="43" text-anchor="middle" fill="var(--ink)">4</text>
+    <text x="242" y="79" text-anchor="middle" fill="var(--ink)">2</text>
+    <text x="286" y="79" text-anchor="middle" fill="var(--ink)">5</text>
+    <text x="242" y="115" text-anchor="middle" fill="var(--ink)">3</text>
+    <text x="286" y="115" text-anchor="middle" fill="var(--ink)">6</text>
+    <text x="264" y="150" font-family="Seravek, sans-serif" font-size="12" text-anchor="middle" fill="var(--ink-faint)">Mᵀ (3×2)</text>
+  </g>
+</svg>
+</DiagramFigure>
+
+```python
+def transpose(A: list[list[float]]) -> list[list[float]]:
+    rows, cols = len(A), len(A[0])
+    return [[A[i][j] for i in range(rows)] for j in range(cols)]
+```
+
+You'll reach for transpose constantly to make shapes line up for matmul — e.g. computing attention scores as `Q @ Kᵀ` so that a `(seq, d)` query matrix can be dot-producted against a `(seq, d)` key matrix to produce a `(seq, seq)` score matrix.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">4</span><h2 class="sec-title">The determinant: does this transformation collapse space?</h2></div>
+
+For a square matrix, the **determinant** is a single number that tells you how much the matrix scales area (in 2D) or volume (in 3D) — and whether it flips orientation along the way.
+
+<Formula name="2×2 determinant">
+det([[a,b],[c,d]]) = ad − bc
+</Formula>
+
+<DiagramFigure caption="Nonzero determinant: the unit square becomes a parallelogram with real area. Zero determinant: a whole dimension is lost — the matrix is singular.">
+<svg viewBox="0 0 460 200" role="img" aria-label="Comparison of two transformations: one with nonzero determinant stretches the unit square into a parallelogram with visible area, the other has a zero determinant and flattens the square onto a single line with no area.">
+  <rect x="20" y="30" width="90" height="90" fill="none" stroke="var(--line)" stroke-width="1"></rect>
+  <polygon points="20,120 110,120 150,50 60,50" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"></polygon>
+  <text x="85" y="150" font-size="12" fill="var(--ink-faint)" text-anchor="middle">det ≠ 0 — area survives</text>
+  <text x="85" y="168" font-size="11" fill="var(--ink-faint)" text-anchor="middle">M = [[2,1],[1,2]], |det| = 3</text>
+  <rect x="270" y="30" width="90" height="90" fill="none" stroke="var(--line)" stroke-width="1"></rect>
+  <line x1="270" y1="120" x2="390" y2="40" stroke="var(--accent-2)" stroke-width="3"></line>
+  <text x="330" y="150" font-size="12" fill="var(--ink-faint)" text-anchor="middle">det = 0 — squashed to a line</text>
+  <text x="330" y="168" font-size="11" fill="var(--ink-faint)" text-anchor="middle">M = [[2,1],[4,2]], det = 0</text>
+</svg>
+</DiagramFigure>
+
+That "singular" case matters directly: a matrix with determinant 0 has no inverse, because it threw away information (multiple inputs now land on the same output point) that no inverse could ever recover.
+
+```python
+def det2x2(M: list[list[float]]) -> float:
+    (a, b), (c, d) = M
+    return a * d - b * c
+```
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">5</span><h2 class="sec-title">The inverse: undoing a transformation</h2></div>
+
+If matrix `M` transforms space one way, its inverse `M⁻¹` transforms it exactly back: `M⁻¹ M = M I = I`, the identity matrix that leaves everything untouched. It exists **only** when `det(M) ≠ 0` — you can't undo a transformation that already threw information away.
+
+<Formula name="2×2 inverse">
+M⁻¹ = (1 / det(M)) · [[d, −b], [−c, a]]  for M = [[a,b],[c,d]]
+</Formula>
+
+```python
+def inverse2x2(M: list[list[float]]) -> list[list[float]]:
+    d = det2x2(M)
+    if d == 0:
+        raise ValueError("matrix is singular — no inverse exists")
+    (a, b), (c, e) = M
+    return [[e / d, -b / d], [-c / d, a / d]]
+```
+
+Geometrically, the inverse is why solving `Ax = b` for `x` is possible: multiply both sides by `A⁻¹` and you get `x = A⁻¹b`. In practice, deep learning almost never inverts a matrix explicitly — it's expensive and numerically unstable at scale — but the concept underlies why gradient-based optimization exists at all: it's a way of approaching the same answer without ever computing the inverse of a giant matrix.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">6</span><h2 class="sec-title">Broadcasting: how a bias vector adds to a whole batch</h2></div>
+
+Element-wise addition, strictly, needs matching shapes. But a dense layer adds a single bias vector `b` to *every row* of a matrix — shapes `(n, d)` and `(d,)`, which don't literally match. **Broadcasting** is the rule that makes this legal: a smaller shape is conceptually stretched to match the larger one along any dimension of size 1, without actually copying data in memory.
+
+<DiagramFigure caption="The bias row is reused for every row of X — one set of numbers, broadcast down a whole batch, instead of duplicated in memory.">
+<svg viewBox="0 0 340 220" role="img" aria-label="A bias row vector is broadcast down three rows of a matrix: dashed copies of the bias vector line up under each row before being added.">
+  <g font-family="ui-monospace, monospace" font-size="12">
+    <g stroke="var(--accent)" stroke-width="1.5" fill="var(--accent-soft)">
+      <rect x="90" y="15" width="50" height="26"></rect>
+      <rect x="140" y="15" width="50" height="26"></rect>
+    </g>
+    <text x="115" y="33" text-anchor="middle" fill="var(--accent)">b₁</text>
+    <text x="165" y="33" text-anchor="middle" fill="var(--accent)">b₂</text>
+    <text x="240" y="33" fill="var(--ink-faint)" font-family="Seravek, sans-serif" font-size="11">bias, shape (2,)</text>
+    <line x1="115" y1="41" x2="115" y2="80" stroke="var(--accent)" stroke-width="1" stroke-dasharray="3 3"></line>
+    <line x1="165" y1="41" x2="165" y2="80" stroke="var(--accent)" stroke-width="1" stroke-dasharray="3 3"></line>
+    <line x1="115" y1="41" x2="115" y2="130" stroke="var(--accent)" stroke-width="1" stroke-dasharray="3 3" opacity="0.6"></line>
+    <line x1="165" y1="41" x2="165" y2="130" stroke="var(--accent)" stroke-width="1" stroke-dasharray="3 3" opacity="0.6"></line>
+    <line x1="115" y1="41" x2="115" y2="180" stroke="var(--accent)" stroke-width="1" stroke-dasharray="3 3" opacity="0.3"></line>
+    <line x1="165" y1="41" x2="165" y2="180" stroke="var(--accent)" stroke-width="1" stroke-dasharray="3 3" opacity="0.3"></line>
+    <g stroke="var(--line)" stroke-width="1" fill="none">
+      <rect x="90" y="80" width="50" height="34"></rect>
+      <rect x="140" y="80" width="50" height="34"></rect>
+      <rect x="90" y="130" width="50" height="34"></rect>
+      <rect x="140" y="130" width="50" height="34"></rect>
+      <rect x="90" y="180" width="50" height="34"></rect>
+      <rect x="140" y="180" width="50" height="34"></rect>
+    </g>
+    <text x="115" y="101" text-anchor="middle" fill="var(--ink)">x₁₁</text>
+    <text x="165" y="101" text-anchor="middle" fill="var(--ink)">x₁₂</text>
+    <text x="115" y="151" text-anchor="middle" fill="var(--ink)">x₂₁</text>
+    <text x="165" y="151" text-anchor="middle" fill="var(--ink)">x₂₂</text>
+    <text x="115" y="201" text-anchor="middle" fill="var(--ink)">x₃₁</text>
+    <text x="165" y="201" text-anchor="middle" fill="var(--ink)">x₃₂</text>
+    <text x="240" y="150" fill="var(--ink-faint)" font-family="Seravek, sans-serif" font-size="11">X, shape (3, 2)</text>
+  </g>
+</svg>
+</DiagramFigure>
+
+```python
+def add_bias(X: list[list[float]], b: list[float]) -> list[list[float]]:
+    return [[x + bi for x, bi in zip(row, b)] for row in X]
+```
+
+<Callout label="The general rule">
+Two shapes are broadcast-compatible if, comparing dimensions from the right, each pair is either equal or one of them is 1. `(32, 768)` and `(768,)` broadcast fine — the second is treated as `(1, 768)` and stretched down 32 rows. `(32, 768)` and `(32,)` would not, without reshaping first.
+</Callout>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">7</span><h2 class="sec-title">Assembling a dense layer</h2></div>
+
+Every piece above is now in hand. A dense (fully-connected) layer is exactly this pipeline:
+
+<Formula name="dense layer forward pass">
+output = relu(W @ x + b)
+</Formula>
+
+<DiagramFigure caption="One vector goes in, one vector comes out — everything between is the operations from Sections 2, 6, and a nonlinearity.">
+<svg viewBox="0 0 560 150" role="img" aria-label="Flow diagram of a dense layer: an input vector x is multiplied by weight matrix W, then bias b is added, then ReLU is applied, producing the output vector, with shapes labeled at each stage.">
+  <defs>
+    <marker id="vm-flowArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"></path></marker>
+  </defs>
+  <g font-family="ui-monospace, monospace" font-size="12" text-anchor="middle">
+    <rect x="10" y="45" width="70" height="40" rx="6" fill="var(--surface-2)" stroke="var(--line)"></rect>
+    <text x="45" y="69" fill="var(--ink)">x</text>
+    <text x="45" y="102" font-family="Seravek, sans-serif" font-size="10" fill="var(--ink-faint)">(d_in,)</text>
+    <path d="M80,65 L128,65" stroke="currentColor" stroke-width="1.5" marker-end="url(#vm-flowArrow)"></path>
+    <text x="104" y="55" font-family="Seravek, sans-serif" font-size="10" fill="var(--ink-faint)">W ·</text>
+    <rect x="130" y="45" width="80" height="40" rx="6" fill="var(--accent-soft)" stroke="var(--accent)"></rect>
+    <text x="170" y="69" fill="var(--accent)">Wx</text>
+    <text x="170" y="102" font-family="Seravek, sans-serif" font-size="10" fill="var(--ink-faint)">(d_out,)</text>
+    <path d="M210,65 L258,65" stroke="currentColor" stroke-width="1.5" marker-end="url(#vm-flowArrow)"></path>
+    <text x="234" y="55" font-family="Seravek, sans-serif" font-size="10" fill="var(--ink-faint)">+ b</text>
+    <rect x="260" y="45" width="90" height="40" rx="6" fill="var(--accent2-soft)" stroke="var(--accent-2)"></rect>
+    <text x="305" y="69" fill="var(--accent-2)">Wx+b</text>
+    <text x="305" y="102" font-family="Seravek, sans-serif" font-size="10" fill="var(--ink-faint)">(d_out,)</text>
+    <path d="M350,65 L398,65" stroke="currentColor" stroke-width="1.5" marker-end="url(#vm-flowArrow)"></path>
+    <text x="374" y="55" font-family="Seravek, sans-serif" font-size="10" fill="var(--ink-faint)">relu</text>
+    <rect x="400" y="45" width="90" height="40" rx="6" fill="var(--surface-2)" stroke="var(--line)"></rect>
+    <text x="445" y="69" fill="var(--ink)">output</text>
+    <text x="445" y="102" font-family="Seravek, sans-serif" font-size="10" fill="var(--ink-faint)">(d_out,)</text>
+  </g>
+</svg>
+</DiagramFigure>
+
+```python
+def relu(v: list[float]) -> list[float]:
+    return [max(0.0, vi) for vi in v]
+
+def dense_layer(W: list[list[float]], x: list[float], b: list[float]) -> list[float]:
+    # W is (d_out, d_in), x is (d_in,) treated as a column
+    z = [sum(W[i][k] * x[k] for k in range(len(x))) for i in range(len(W))]
+    z = [zi + bi for zi, bi in zip(z, b)]
+    return relu(z)
+```
+
+Stack a few of these, each with its own `W` and `b`, and you have a multi-layer perceptron. Everything past this point — CNNs, transformers, diffusion models — is this same pattern with more structure imposed on `W`.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">8</span><h2 class="sec-title">Workbook</h2></div>
+
+Three tasks. Use only the functions you've built in this lesson — no `numpy`.
+
+<WorkTask label="Task 1 · Implement" title="Element-wise vs. matmul, side by side">
+
+Given `A = [[1, 2], [3, 4]]` and `B = [[5, 6], [7, 8]]`, compute both the Hadamard product and the matrix product by hand first, then check with code.
+
+```python
+A = [[1, 2], [3, 4]]
+B = [[5, 6], [7, 8]]
+
+# TODO: predict hadamard(A, B) and matmul(A, B) on paper, then verify
+print(hadamard(A, B))
+print(matmul(A, B))
+```
+
+<Solution>
+
+```python
+hadamard(A, B) == [[5, 12], [21, 32]]     # position-by-position
+matmul(A, B)   == [[19, 22], [43, 50]]    # row·column dot products
+
+# e.g. matmul row 0, col 0: 1*5 + 2*7 = 19
+# e.g. matmul row 1, col 1: 3*6 + 4*8 = 50
+```
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 2 · Implement" title="Determinant, inverse, and a sanity check">
+
+For `M = [[4, 7], [2, 6]]`: compute `det(M)`, then `M⁻¹`, then verify `M @ M⁻¹` comes back to (approximately) the identity matrix.
+
+```python
+M = [[4, 7], [2, 6]]
+
+# TODO: det2x2(M), inverse2x2(M), then matmul(M, inverse2x2(M))
+```
+
+<Solution>
+
+```python
+det2x2(M)        # = 4*6 - 7*2 = 10
+inverse2x2(M)    # = [[0.6, -0.7], [-0.2, 0.4]]
+matmul(M, inverse2x2(M))
+# ≈ [[1.0, 0.0], [0.0, 1.0]]  — the identity matrix, up to floating point
+```
+
+Since `det(M) = 10 ≠ 0`, the inverse is guaranteed to exist — and multiplying a matrix by its own inverse always returns you to the identity, the "do nothing" transformation.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 3 · Apply" title="Run a dense layer by hand, then in code">
+
+A tiny layer: `W = [[1, -1], [0, 2], [3, 1]]` (shape 3×2, so 2 inputs → 3 outputs), `b = [0, -1, 2]`, input `x = [1, 2]`. Compute `relu(W @ x + b)` by hand, then confirm with `dense_layer`.
+
+```python
+W = [[1, -1], [0, 2], [3, 1]]
+b = [0, -1, 2]
+x = [1, 2]
+
+# TODO: work out W @ x, then + b, then relu, by hand — then check
+print(dense_layer(W, x, b))
+```
+
+<Solution>
+
+```python
+# W @ x:
+#   row0: 1*1 + (-1)*2 = -1
+#   row1: 0*1 +   2*2  =  4
+#   row2: 3*1 +   1*2  =  5
+# + b:      [-1+0, 4-1, 5+2] = [-1, 3, 7]
+# relu:     [0, 3, 7]
+
+dense_layer(W, x, b)  # [0, 3, 7]
+```
+
+Notice the first neuron died (its pre-activation was negative, so ReLU zeroed it) — a preview of why "dead ReLUs" become a real training concern once you're stacking thousands of these.
+
+</Solution>
+</WorkTask>
+
+</section>

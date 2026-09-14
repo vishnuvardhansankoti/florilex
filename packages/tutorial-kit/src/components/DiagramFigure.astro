@@ -1,0 +1,33 @@
+---
+interface Props {
+  caption: string;
+}
+const { caption } = Astro.props;
+---
+<figure>
+  <div class="fig-wrap">
+    <slot />
+  </div>
+  <figcaption>{caption}</figcaption>
+</figure>
+
+<style>
+  figure {
+    margin: 1.8rem 0 2rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 1.2rem 1.2rem 0.9rem;
+    box-shadow: var(--shadow);
+  }
+  .fig-wrap { overflow-x: auto; }
+  .fig-wrap :global(svg) { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  figcaption {
+    font-size: 0.86rem;
+    color: var(--ink-faint);
+    margin-top: 0.8rem;
+    padding-top: 0.7rem;
+    border-top: 1px solid var(--line-soft);
+    text-align: center;
+  }
+</style>

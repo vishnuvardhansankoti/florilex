@@ -1,0 +1,59 @@
+---
+title: "Hello, <em>Go</em>"
+subtitle: "A placeholder lesson proving this series builds, deploys, and brands itself independently from the AIML series — same shared components, different accent."
+summary: "This is a placeholder lesson that exercises the container architecture rather than teaching Go itself. It confirms that the Go series can reuse the same shared @florilex/tutorial-kit components — Callout, Formula, WorkTask, Solution — as the AIML series while shipping its own config, cyan accent theme, and independent Cloudflare Pages deploy. A minimal Hello, Go program demonstrates the Formula and code-block components rendering correctly in this app. A single warm-up task asks you to run the snippet locally with go run. Real Go content will replace this lesson once it's written."
+phase: "00-getting-started"
+phaseTitle: "Phase 00 — Getting Started"
+order: 1
+lessonNumber: 1
+hook: '"A little copying is better than a little dependency."'
+hookCredit: "— Go proverb"
+---
+
+import Callout from "@florilex/tutorial-kit/components/Callout.astro";
+import Formula from "@florilex/tutorial-kit/components/Formula.astro";
+import WorkTask from "@florilex/tutorial-kit/components/WorkTask.astro";
+import Solution from "@florilex/tutorial-kit/components/Solution.astro";
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">1</span><h2 class="sec-title">This is a stub</h2></div>
+
+This lesson exists to prove the container architecture, not to teach Go yet. It uses the exact same `@florilex/tutorial-kit` components as the AIML series — `Callout`, `Formula`, `WorkTask`, `Solution` — but this app has its own `astro.config.mjs` (`base: "/go"`), its own `theme.css` (Go's cyan accent instead of AIML's orange/teal), and deploys as a completely separate Cloudflare Pages project.
+
+<Callout label="What this proves">
+Content authors write MDX using shared components; each series controls its own branding, content collection, and deploy — the container Worker is the only thing that stitches them into one site.
+</Callout>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">2</span><h2 class="sec-title">A first real snippet, once content lands</h2></div>
+
+Replace this section with actual lesson content — the formula and workbook blocks below just confirm the shared components render correctly in this app too.
+
+<Formula name="hello world">
+fmt.Println("Hello, Go")
+</Formula>
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("Hello, Go")
+}
+```
+
+<WorkTask label="Task 1 · Warm-up" title="Run it yourself">
+
+Save the snippet above as `main.go` and run `go run main.go`. Confirm it prints `Hello, Go`.
+
+<Solution>
+
+If `go` isn't installed yet, get it from the official Go downloads page, then re-run `go run main.go` from the directory containing the file.
+
+</Solution>
+</WorkTask>
+
+</section>

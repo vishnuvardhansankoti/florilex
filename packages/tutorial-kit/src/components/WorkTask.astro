@@ -1,0 +1,36 @@
+---
+interface Props {
+  label: string;
+  title: string;
+}
+const { label, title } = Astro.props;
+---
+<div class="workbook">
+  <span class="task-label">{label}</span>
+  <h3>{title}</h3>
+  <slot />
+</div>
+
+<style>
+  .workbook {
+    border: 1.5px dashed var(--accent);
+    border-radius: 12px;
+    background: var(--surface);
+    padding: 1.8rem 1.8rem 1.6rem;
+    margin: 1.6rem 0;
+  }
+  .workbook h3 {
+    font-size: 1.08rem;
+    margin: 0 0 0.3rem;
+    color: var(--accent);
+    font-family: Seravek, sans-serif;
+    font-weight: 700;
+  }
+  .task-label {
+    font-family: ui-monospace, monospace;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ink-faint);
+  }
+</style>

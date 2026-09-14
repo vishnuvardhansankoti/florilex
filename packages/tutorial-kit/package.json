@@ -1,0 +1,11 @@
+{
+  "name": "@florilex/tutorial-kit",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    "./tokens.css": "./src/tokens.css",
+    "./stripTags": "./src/stripTags.ts",
+    "./components/*": "./src/components/*"
+  }
+}

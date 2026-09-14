@@ -1,0 +1,230 @@
+/* Shared design tokens + base typography for every tutorial series.
+   Each app may override --accent / --accent-2 in its own theme.css
+   (imported AFTER this file) to give itself a distinct identity. */
+
+:root {
+  --bg: #f2f4f5;
+  --surface: #ffffff;
+  --surface-2: #e9edef;
+  --ink: #12181d;
+  --ink-soft: #4b5560;
+  --ink-faint: #7c8890;
+  --line: #c9d2d8;
+  --line-soft: #dde3e6;
+  --accent: #c9451c;
+  --accent-ink: #ffffff;
+  --accent-2: #1f6f6b;
+  --accent-soft: #f4ddd0;
+  --accent2-soft: #dcece9;
+  --code-bg: #e9edef;
+  --shadow: 0 1px 2px rgba(18, 24, 29, 0.06), 0 8px 24px rgba(18, 24, 29, 0.05);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0c1013;
+    --surface: #14191d;
+    --surface-2: #1a2024;
+    --ink: #e7ebed;
+    --ink-soft: #a7b1b7;
+    --ink-faint: #748086;
+    --line: #2a3237;
+    --line-soft: #202729;
+    --accent-ink: #1a0d06;
+    --accent-soft: #2c1911;
+    --accent2-soft: #12211f;
+    --code-bg: #1a2024;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #0c1013;
+  --surface: #14191d;
+  --surface-2: #1a2024;
+  --ink: #e7ebed;
+  --ink-soft: #a7b1b7;
+  --ink-faint: #748086;
+  --line: #2a3237;
+  --line-soft: #202729;
+  --accent-ink: #1a0d06;
+  --accent-soft: #2c1911;
+  --accent2-soft: #12211f;
+  --code-bg: #1a2024;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: Seravek, "Gill Sans Nova", "Segoe UI", Ysabeau, Optima, sans-serif;
+  font-size: 17px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  margin: 0;
+}
+
+h1, h2, h3 {
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  font-weight: 600;
+  text-wrap: balance;
+  color: var(--ink);
+}
+
+code, .mono, kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.page {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 4rem 1.5rem 6rem;
+}
+
+.eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 0.6em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: 1.4rem;
+  flex-wrap: wrap;
+}
+.eyebrow .dot { color: var(--accent); }
+.eyebrow a { color: var(--ink-faint); text-decoration: none; border-bottom: 1px dotted var(--line); }
+.eyebrow a:hover { color: var(--accent-2); }
+
+h1.title {
+  font-size: clamp(2.1rem, 5vw, 2.75rem);
+  line-height: 1.12;
+  margin: 0 0 0.9rem;
+}
+h1.title em { font-style: italic; color: var(--accent); }
+
+.subtitle {
+  font-size: 1.14rem;
+  color: var(--ink-soft);
+  max-width: 58ch;
+  margin: 0 0 2.6rem;
+}
+
+.hook {
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 1.5rem 0;
+  margin: 0 0 3.2rem;
+  font-family: "Iowan Old Style", Palatino, Georgia, serif;
+  font-size: 1.28rem;
+  line-height: 1.5;
+  color: var(--ink);
+}
+.hook span.credit {
+  display: block;
+  margin-top: 0.6rem;
+  font-family: ui-monospace, monospace;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  color: var(--ink-faint);
+  font-style: normal;
+}
+
+.page-summary {
+  background: var(--surface-2);
+  border-radius: 10px;
+  padding: 1.3rem 1.5rem;
+  margin: 0 0 3.2rem;
+  max-width: 66ch;
+}
+.page-summary-title {
+  font-family: ui-monospace, monospace;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+  margin: 0 0 0.6rem;
+}
+.page-summary p {
+  color: var(--ink-soft);
+  margin: 0;
+}
+
+section.lesson { margin: 3.6rem 0; }
+section.lesson:first-of-type { margin-top: 0; }
+
+.sec-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  margin-bottom: 1rem;
+}
+.sec-num {
+  font-family: ui-monospace, monospace;
+  font-size: 0.95rem;
+  color: var(--accent);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 999px;
+  width: 2.1em;
+  height: 2.1em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+h2.sec-title { font-size: 1.5rem; margin: 0; }
+
+section.lesson > p, section.lesson > ul, section.lesson > ol { max-width: 66ch; }
+
+p { margin: 0 0 1.1rem; }
+ul, ol { padding-left: 1.3em; margin: 0 0 1.1rem; }
+li { margin-bottom: 0.4em; }
+strong { color: var(--ink); }
+a { color: var(--accent-2); }
+
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 1rem 1.2rem;
+  overflow-x: auto;
+  margin: 1.2rem 0;
+  max-width: 66ch;
+}
+pre code {
+  font-size: 0.87rem;
+  line-height: 1.55;
+  color: var(--ink);
+  background: none;
+  white-space: pre;
+}
+p code, li code {
+  background: var(--code-bg);
+  border-radius: 4px;
+  padding: 0.1em 0.4em;
+  font-size: 0.88em;
+}
+
+.tablewrap { overflow-x: auto; margin: 1.2rem 0; }
+table { border-collapse: collapse; width: 100%; max-width: 66ch; font-size: 0.92rem; }
+th, td { text-align: left; padding: 0.5em 0.9em; border-bottom: 1px solid var(--line-soft); }
+th { color: var(--ink-faint); font-weight: 600; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; }
+
+footer {
+  margin-top: 4.5rem;
+  padding-top: 1.6rem;
+  border-top: 1px solid var(--line);
+  font-size: 0.88rem;
+  color: var(--ink-faint);
+}
+footer a { color: var(--accent-2); }
+
+@media (max-width: 560px) {
+  .page { padding: 2.6rem 1.1rem 4rem; }
+  .hook { font-size: 1.12rem; }
+}

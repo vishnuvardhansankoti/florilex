@@ -1,0 +1,385 @@
+---
+title: "Linear Algebra <em>Intuition</em>"
+subtitle: "Before you can read a single line of PyTorch and know what it's really doing, you need to see vectors and matrices as <em>things happening in space</em> — not rows of numbers to plug into formulas."
+summary: "This lesson builds geometric intuition for the core objects of linear algebra used throughout AI: vectors as arrows with magnitude and direction, and matrices as transformations rather than static grids of numbers. It covers vector addition, the dot product's two equivalent definitions, and how dividing out lengths yields cosine similarity — the same operation that powers transformer attention scores. From there it introduces linear independence, span, and basis, then shows how row reduction reveals a matrix's rank, the count of genuinely independent directions it contains. The lesson closes by connecting rank directly to LoRA, showing how fine-tuning large models can exploit the fact that a weight update rarely needs full rank. A three-part workbook has you implement cosine similarity from scratch, compare toy word embeddings, and reason about dependence and rank by eye."
+phase: "01-math-foundations"
+phaseTitle: "Phase 01 — Math Foundations"
+order: 1
+lessonNumber: 1
+hook: '"Every AI model is just matrix math wearing a fancy hat."'
+hookCredit: "— the one sentence worth memorizing before anything else in this phase"
+sourceUrl: "https://aiengineeringfromscratch.com/lesson?path=phases%2F01-math-foundations%2F01-linear-algebra-intuition"
+---
+
+import Callout from "@florilex/tutorial-kit/components/Callout.astro";
+import Formula from "@florilex/tutorial-kit/components/Formula.astro";
+import DiagramFigure from "@florilex/tutorial-kit/components/DiagramFigure.astro";
+import WorkTask from "@florilex/tutorial-kit/components/WorkTask.astro";
+import Solution from "@florilex/tutorial-kit/components/Solution.astro";
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">1</span><h2 class="sec-title">A vector is an arrow, not a list</h2></div>
+
+Write a vector as `[3, 2]` and it looks like bookkeeping. Draw it, and it's an arrow from the origin that walks 3 steps right and 2 steps up. Same object, two readings — and the geometric one is the reading that makes everything downstream click.
+
+Two properties fall directly out of the picture: how **long** the arrow is (its magnitude) and which way it **points** (its direction). Length comes from the Pythagorean theorem generalized to *n* dimensions:
+
+<Formula name="magnitude (L2 norm)">
+‖v‖ = √(v₁² + v₂² + ⋯ + vₙ²)
+</Formula>
+
+For `v = [3, 2]`: ‖v‖ = √(9 + 4) = √13 ≈ 3.61.
+
+<DiagramFigure caption="The vector [3, 2] as an arrow: 3 steps along x, 2 steps along y, length √13.">
+<svg viewBox="0 0 320 260" role="img" aria-label="A coordinate grid showing the vector [3,2] drawn as an arrow from the origin, with dashed guide lines showing its horizontal run of 3 and vertical rise of 2.">
+  <defs>
+    <marker id="la-arrowAccent" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"></path>
+    </marker>
+    <marker id="la-arrowAxis" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"></path>
+    </marker>
+  </defs>
+  <g stroke="var(--line)" stroke-width="1">
+    <line x1="40" y1="20" x2="40" y2="220"></line>
+    <line x1="80" y1="20" x2="80" y2="220"></line>
+    <line x1="120" y1="20" x2="120" y2="220"></line>
+    <line x1="160" y1="20" x2="160" y2="220"></line>
+    <line x1="200" y1="20" x2="200" y2="220"></line>
+    <line x1="240" y1="20" x2="240" y2="220"></line>
+    <line x1="20" y1="220" x2="280" y2="220"></line>
+    <line x1="20" y1="180" x2="280" y2="180"></line>
+    <line x1="20" y1="140" x2="280" y2="140"></line>
+    <line x1="20" y1="100" x2="280" y2="100"></line>
+    <line x1="20" y1="60" x2="280" y2="60"></line>
+  </g>
+  <line x1="40" y1="220" x2="260" y2="220" stroke="currentColor" stroke-width="1.5" marker-end="url(#la-arrowAxis)"></line>
+  <line x1="40" y1="220" x2="40" y2="30" stroke="currentColor" stroke-width="1.5" marker-end="url(#la-arrowAxis)"></line>
+  <text x="264" y="224" font-size="12" fill="currentColor">x</text>
+  <text x="30" y="26" font-size="12" fill="currentColor">y</text>
+  <line x1="40" y1="220" x2="160" y2="220" stroke="var(--ink-faint)" stroke-width="1.5" stroke-dasharray="4 3"></line>
+  <line x1="160" y1="220" x2="160" y2="140" stroke="var(--ink-faint)" stroke-width="1.5" stroke-dasharray="4 3"></line>
+  <text x="94" y="236" font-size="12" fill="var(--ink-faint)" text-anchor="middle">3</text>
+  <text x="172" y="184" font-size="12" fill="var(--ink-faint)">2</text>
+  <line x1="40" y1="220" x2="160" y2="140" stroke="var(--accent)" stroke-width="2.5" marker-end="url(#la-arrowAccent)"></line>
+  <text x="168" y="128" font-size="13" fill="var(--accent)" font-family="ui-monospace, monospace">v = [3, 2]</text>
+</svg>
+</DiagramFigure>
+
+<Callout label="Where this shows up">
+A word embedding is a vector with 768 or 4096 numbers instead of 2 — same idea, just a direction in a space with too many axes to draw. A row of pixel values, a user's preference profile, a sentence's meaning — in AI, almost everything gets turned into an arrow in some space so that geometry (distance, angle, projection) can be used to reason about it.
+</Callout>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">2</span><h2 class="sec-title">Adding vectors is walking, then walking again</h2></div>
+
+To add two vectors, walk the first one, then walk the second one starting from where you landed. Algebraically that's just adding components; geometrically it's "tip-to-tail," and it traces out a parallelogram.
+
+<Formula name="vector addition">
+a + b = [a₁+b₁, a₂+b₂, …, aₙ+bₙ]
+</Formula>
+
+<DiagramFigure caption="a = [3, 1] and b = [1, 2]: walk a, then walk b from there, and you arrive at a+b = [4, 3].">
+<svg viewBox="0 0 320 260" role="img" aria-label="Vector addition shown as a parallelogram: vector a and vector b both start at the origin, and their sum a+b is the diagonal of the parallelogram they form.">
+  <defs>
+    <marker id="la-arrA" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"></path></marker>
+    <marker id="la-arrB" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent-2)"></path></marker>
+    <marker id="la-arrAxis2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"></path></marker>
+  </defs>
+  <line x1="40" y1="220" x2="260" y2="220" stroke="currentColor" stroke-width="1.5" marker-end="url(#la-arrAxis2)"></line>
+  <line x1="40" y1="220" x2="40" y2="30" stroke="currentColor" stroke-width="1.5" marker-end="url(#la-arrAxis2)"></line>
+  <line x1="40" y1="220" x2="160" y2="180" stroke="var(--accent)" stroke-width="2.5" marker-end="url(#la-arrA)"></line>
+  <text x="164" y="176" font-size="13" fill="var(--accent)" font-family="ui-monospace, monospace">a</text>
+  <line x1="40" y1="220" x2="80" y2="140" stroke="var(--accent-2)" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#la-arrB)"></line>
+  <text x="60" y="132" font-size="13" fill="var(--accent-2)" font-family="ui-monospace, monospace">b</text>
+  <line x1="160" y1="180" x2="200" y2="100" stroke="var(--accent-2)" stroke-width="2" stroke-dasharray="5 4"></line>
+  <line x1="40" y1="220" x2="200" y2="100" stroke="currentColor" stroke-width="2.5" marker-end="url(#la-arrAxis2)"></line>
+  <text x="204" y="96" font-size="13" fill="currentColor" font-family="ui-monospace, monospace">a+b</text>
+</svg>
+</DiagramFigure>
+
+Scalar multiplication (`2·v`) is the same arrow, just stretched or shrunk — negative scalars flip it around. This is the entire vocabulary a neural network uses to move points around before anything nonlinear happens: **stretch, rotate, add**.
+
+```python
+def add(a: list[float], b: list[float]) -> list[float]:
+    return [ai + bi for ai, bi in zip(a, b)]
+
+def scale(v: list[float], k: float) -> list[float]:
+    return [k * vi for vi in v]
+```
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">3</span><h2 class="sec-title">The dot product measures agreement</h2></div>
+
+The dot product has an algebraic definition and a geometric one, and the whole trick of linear algebra intuition is holding both in your head at once.
+
+<Formula name="algebraic">
+a · b = a₁b₁ + a₂b₂ + ⋯ + aₙbₙ
+</Formula>
+
+<Formula name="geometric">
+a · b = ‖a‖ ‖b‖ cos(θ)
+</Formula>
+
+Set them equal and something useful pops out: the dot product is large and positive when two vectors point the *same way*, zero when they're perpendicular, and negative when they point opposite ways. It's a number that measures **directional agreement**, scaled by how long the vectors are.
+
+Divide out the lengths and you get **cosine similarity** — agreement with the lengths ignored, just "how aligned are these two directions":
+
+<Formula name="cosine similarity">
+cos(θ) = (a · b) / (‖a‖ ‖b‖)
+</Formula>
+
+<DiagramFigure caption="The dot product a·b is (up to a scaling factor) the length of a's shadow cast onto b — a projection.">
+<svg viewBox="0 0 340 220" role="img" aria-label="Two vectors a and b drawn from the origin with the angle theta between them, and the projection of a onto b highlighted as a segment along b.">
+  <defs>
+    <marker id="la-arrA2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"></path></marker>
+    <marker id="la-arrB2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"></path></marker>
+  </defs>
+  <line x1="40" y1="190" x2="290" y2="140" stroke="currentColor" stroke-width="2" marker-end="url(#la-arrB2)"></line>
+  <text x="294" y="138" font-size="13" fill="currentColor" font-family="ui-monospace, monospace">b</text>
+  <line x1="40" y1="190" x2="220" y2="40" stroke="currentColor" stroke-width="2" marker-end="url(#la-arrA2)"></line>
+  <text x="222" y="34" font-size="13" fill="currentColor" font-family="ui-monospace, monospace">a</text>
+  <line x1="40" y1="190" x2="184" y2="163.4" stroke="var(--accent)" stroke-width="4"></line>
+  <text x="70" y="212" font-size="12" fill="var(--accent)" font-family="ui-monospace, monospace">proj of a onto b</text>
+  <line x1="220" y1="40" x2="184" y2="163.4" stroke="var(--ink-faint)" stroke-width="1.5" stroke-dasharray="4 3"></line>
+  <path d="M 90 187 A 50 50 0 0 0 100 165" fill="none" stroke="var(--ink-faint)" stroke-width="1.3"></path>
+  <text x="98" y="182" font-size="12" fill="var(--ink-faint)">θ</text>
+</svg>
+</DiagramFigure>
+
+<Callout label="Where this shows up">
+Every transformer attention score is a dot product. A query vector `q` and a key vector `k` are compared with `q · k` — high agreement means "this key is relevant to this query." Scale by `√d` to keep the numbers well-behaved, run everything through softmax, and you have attention weights:
+
+<Formula name="scaled dot-product attention">
+Attention(Q, K, V) = softmax(QKᵀ / √d) · V
+</Formula>
+</Callout>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">4</span><h2 class="sec-title">A matrix is a transformation, not a spreadsheet</h2></div>
+
+Here's the reframe that makes matrix multiplication click: a matrix is a machine that takes vectors in and moves them somewhere else — every point in space gets stretched, rotated, sheared, or flattened, all at once, in one consistent way.
+
+To find out exactly what a matrix does, you only need to track two vectors: **where does î = [1,0] end up, and where does ĵ = [0,1] end up?** Those two answers *are* the matrix — they become its columns.
+
+<DiagramFigure caption="The matrix [[2,1],[0,1]] sends î to [2,0] and ĵ to [1,1] — those images become the matrix's columns, and the whole square is dragged along with them.">
+<svg viewBox="0 0 460 220" role="img" aria-label="Before and after diagram: on the left, the unit square with basis vectors i-hat and j-hat; on the right, the same square transformed by a matrix into a slanted parallelogram, with i-hat and j-hat now pointing along the matrix's columns.">
+  <defs>
+    <marker id="la-arrI" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"></path></marker>
+    <marker id="la-arrJ" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent-2)"></path></marker>
+  </defs>
+  <g>
+    <line x1="30" y1="190" x2="30" y2="30" stroke="var(--line)" stroke-width="1"></line>
+    <line x1="30" y1="190" x2="190" y2="190" stroke="var(--line)" stroke-width="1"></line>
+    <polygon points="30,190 90,190 90,130 30,130" fill="var(--accent2-soft)" opacity="0.6"></polygon>
+    <line x1="30" y1="190" x2="90" y2="190" stroke="var(--accent)" stroke-width="2.5" marker-end="url(#la-arrI)"></line>
+    <line x1="30" y1="190" x2="30" y2="130" stroke="var(--accent-2)" stroke-width="2.5" marker-end="url(#la-arrJ)"></line>
+    <text x="94" y="188" font-size="12" fill="var(--accent)" font-family="ui-monospace, monospace">î</text>
+    <text x="14" y="128" font-size="12" fill="var(--accent-2)" font-family="ui-monospace, monospace">ĵ</text>
+    <text x="30" y="210" font-size="12" fill="var(--ink-faint)" text-anchor="middle">before</text>
+  </g>
+  <path d="M210,120 L250,120" stroke="currentColor" stroke-width="1.5" fill="none" marker-end="url(#la-arrI)"></path>
+  <text x="230" y="112" font-size="12" fill="var(--ink-faint)" text-anchor="middle" font-family="ui-monospace, monospace">M · v</text>
+  <g>
+    <line x1="290" y1="190" x2="290" y2="30" stroke="var(--line)" stroke-width="1"></line>
+    <line x1="290" y1="190" x2="450" y2="190" stroke="var(--line)" stroke-width="1"></line>
+    <polygon points="290,190 410,190 440,130 320,130" fill="var(--accent2-soft)" opacity="0.6"></polygon>
+    <line x1="290" y1="190" x2="410" y2="190" stroke="var(--accent)" stroke-width="2.5" marker-end="url(#la-arrI)"></line>
+    <line x1="290" y1="190" x2="320" y2="130" stroke="var(--accent-2)" stroke-width="2.5" marker-end="url(#la-arrJ)"></line>
+    <text x="412" y="188" font-size="12" fill="var(--accent)" font-family="ui-monospace, monospace">Mî</text>
+    <text x="324" y="126" font-size="12" fill="var(--accent-2)" font-family="ui-monospace, monospace">Mĵ</text>
+    <text x="290" y="210" font-size="12" fill="var(--ink-faint)" text-anchor="middle">after M = [[2,1],[0,1]]</text>
+  </g>
+</svg>
+</DiagramFigure>
+
+Matrix multiplication, then, is just "apply this transformation to every vector at once" — and multiplying two matrices together (`M₂M₁`) means "do transformation 1, then transformation 2." That's why deep networks stack matrix multiplies: each layer is another reshaping of space, with a nonlinearity (ReLU, GELU, …) bent in between so the whole stack can't collapse back into one giant matrix.
+
+```python
+def matmul(A: list[list[float]], B: list[list[float]]) -> list[list[float]]:
+    rows_A, cols_A = len(A), len(A[0])
+    rows_B, cols_B = len(B), len(B[0])
+    assert cols_A == rows_B, "inner dimensions must match"
+
+    result = [[0.0] * cols_B for _ in range(rows_A)]
+    for i in range(rows_A):
+        for j in range(cols_B):
+            result[i][j] = sum(A[i][k] * B[k][j] for k in range(cols_A))
+    return result
+```
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">5</span><h2 class="sec-title">Independence, span, and basis</h2></div>
+
+A set of vectors is **linearly independent** if none of them can be built by combining the others — each one adds a genuinely new direction. If one vector is just a scaled copy of another, they're **dependent**, and together they can only ever reach points along a single line, no matter how you combine them.
+
+The set of every point reachable by combining a group of vectors is their **span**. A minimal set of independent vectors whose span covers the whole space is a **basis** for that space — in 2D, any two independent vectors will do; î and ĵ are just the tidiest choice.
+
+<DiagramFigure caption="Independent vectors open up new directions; dependent ones just retrace a direction you already had.">
+<svg viewBox="0 0 460 220" role="img" aria-label="Comparison: on the left, two independent vectors span the entire shaded plane; on the right, two dependent, collinear vectors only ever reach points along a single line.">
+  <defs>
+    <marker id="la-arrDep1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"></path></marker>
+    <marker id="la-arrDep2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent-2)"></path></marker>
+  </defs>
+  <g>
+    <rect x="30" y="30" width="160" height="160" fill="var(--accent2-soft)" opacity="0.55"></rect>
+    <line x1="110" y1="190" x2="110" y2="30" stroke="var(--line)" stroke-width="1"></line>
+    <line x1="30" y1="110" x2="190" y2="110" stroke="var(--line)" stroke-width="1"></line>
+    <line x1="110" y1="110" x2="180" y2="70" stroke="var(--accent)" stroke-width="2.5" marker-end="url(#la-arrDep1)"></line>
+    <line x1="110" y1="110" x2="70" y2="150" stroke="var(--accent-2)" stroke-width="2.5" marker-end="url(#la-arrDep2)"></line>
+    <text x="110" y="208" font-size="12" fill="var(--ink-faint)" text-anchor="middle">independent — span = whole plane</text>
+  </g>
+  <g>
+    <line x1="320" y1="190" x2="440" y2="50" stroke="var(--line)" stroke-width="1"></line>
+    <line x1="380" y1="120" x2="410" y2="85" stroke="var(--accent)" stroke-width="2.5" marker-end="url(#la-arrDep1)"></line>
+    <line x1="380" y1="120" x2="350" y2="155" stroke="var(--accent-2)" stroke-width="2.5" marker-end="url(#la-arrDep2)"></line>
+    <text x="380" y="208" font-size="12" fill="var(--ink-faint)" text-anchor="middle">dependent — span = one line</text>
+  </g>
+</svg>
+</DiagramFigure>
+
+The quickest 2D independence test: two vectors `[a,b]` and `[c,d]` are independent exactly when `ad − bc ≠ 0` — that's the determinant, and it's also the (signed) area of the parallelogram they sweep out. Zero area means the vectors collapsed onto the same line.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">6</span><h2 class="sec-title">Rank: how many genuinely new directions survive</h2></div>
+
+**Row reduction** (Gaussian elimination) is the systematic version of "notice when a row is secretly a combination of other rows." You repeatedly subtract multiples of one row from another until the matrix is in a staircase shape — each step either reveals a new independent direction (a pivot) or reveals that a row was redundant all along (it zeroes out completely).
+
+The number of pivots you're left with is the **rank** of the matrix — literally a count of how many independent directions it actually contains, out of however many rows or columns it was written with. A "full rank" matrix wastes nothing; a "low rank" matrix is quietly doing much less work than its size suggests.
+
+<div class="tablewrap">
+| Concept | Question it answers |
+|---|---|
+| Independence | Does this vector add anything new? |
+| Span | What can be reached by combining these vectors? |
+| Basis | What's the smallest set that reaches everything? |
+| Rank | How many independent directions does this matrix actually have? |
+</div>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">7</span><h2 class="sec-title">Why LoRA is a rank argument</h2></div>
+
+Fine-tuning a large model means learning an update `ΔW` to add to its weight matrix `W`. If `W` is, say, 4096 × 4096, that's 16.7 million numbers to learn — for every layer, for every fine-tune. LoRA's bet is that the *useful* update barely uses all those directions: it constrains `ΔW` to be low rank by writing it as a product of two thin matrices.
+
+<Formula name="low-rank adaptation">
+ΔW = A · B   (A is d×r, B is r×d, r ≪ d)
+</Formula>
+
+<DiagramFigure caption="Instead of learning all of ΔW, LoRA learns two thin matrices whose product approximates it — parameters drop from d² to 2dr.">
+<svg viewBox="0 0 460 190" role="img" aria-label="Diagram of LoRA: a large square weight update matrix delta-W is decomposed into the product of a tall thin matrix A and a short wide matrix B, where the inner dimension r is much smaller than d.">
+  <rect x="20" y="30" width="120" height="120" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="5 4"></rect>
+  <text x="80" y="95" font-size="15" fill="currentColor" text-anchor="middle" font-family="ui-monospace, monospace">ΔW</text>
+  <text x="80" y="168" font-size="11" fill="var(--ink-faint)" text-anchor="middle">d × d (huge)</text>
+  <text x="165" y="98" font-size="18" fill="var(--ink-faint)" text-anchor="middle">=</text>
+  <rect x="190" y="30" width="30" height="120" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"></rect>
+  <text x="205" y="95" font-size="13" fill="var(--accent)" text-anchor="middle" font-family="ui-monospace, monospace">A</text>
+  <text x="205" y="168" font-size="11" fill="var(--ink-faint)" text-anchor="middle">d × r</text>
+  <text x="238" y="98" font-size="18" fill="var(--ink-faint)" text-anchor="middle">·</text>
+  <rect x="258" y="60" width="150" height="30" fill="var(--accent2-soft)" stroke="var(--accent-2)" stroke-width="1.5"></rect>
+  <text x="333" y="80" font-size="13" fill="var(--accent-2)" text-anchor="middle" font-family="ui-monospace, monospace">B</text>
+  <text x="333" y="108" font-size="11" fill="var(--ink-faint)" text-anchor="middle">r × d</text>
+  <text x="255" y="45" font-size="11" fill="var(--ink-faint)" text-anchor="middle">r ≪ d</text>
+</svg>
+</DiagramFigure>
+
+This is the same rank idea from Section 6, applied on purpose: by forcing the update through a narrow r-dimensional bottleneck, you're betting that a fine-tune only needs a handful of new "directions of change," not a full-rank rewrite of the whole matrix. When `r` is small (8, 16, 64) compared to `d` (thousands), the parameter savings are enormous — and in practice, it works remarkably well.
+
+<Callout label="Tying it together">
+**Embeddings** put meaning into vector space so distance and angle mean something. **Attention** uses the dot product to score relevance between vectors. **LoRA** uses rank to make learning cheap. Three different corners of a transformer, one shared vocabulary.
+</Callout>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">8</span><h2 class="sec-title">Workbook</h2></div>
+
+Three short tasks, in order of difficulty. Try each before opening its solution.
+
+<WorkTask label="Task 1 · Implement" title="Dot product, norm, and cosine similarity — from scratch">
+
+No `numpy`. Fill in the three functions below using only what Sections 1 and 3 covered.
+
+```python
+import math
+
+def dot(a: list[float], b: list[float]) -> float:
+    # TODO: sum of elementwise products
+    ...
+
+def norm(v: list[float]) -> float:
+    # TODO: sqrt of the sum of squares
+    ...
+
+def cosine_similarity(a: list[float], b: list[float]) -> float:
+    # TODO: dot(a, b) / (norm(a) * norm(b))
+    ...
+```
+
+<Solution>
+
+```python
+import math
+
+def dot(a: list[float], b: list[float]) -> float:
+    return sum(ai * bi for ai, bi in zip(a, b))
+
+def norm(v: list[float]) -> float:
+    return math.sqrt(dot(v, v))
+
+def cosine_similarity(a: list[float], b: list[float]) -> float:
+    return dot(a, b) / (norm(a) * norm(b))
+```
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 2 · Apply" title="Which pair of &quot;words&quot; is more alike?">
+
+Three toy 5-dimensional embeddings (made up, but shaped like real ones):
+
+```python
+cat      = [0.9, 0.1, 0.4, 0.7, 0.2]
+kitten   = [0.8, 0.2, 0.5, 0.6, 0.3]
+airplane = [0.1, 0.9, 0.2, 0.0, 0.8]
+```
+
+Using your `cosine_similarity` from Task 1, compute similarity(cat, kitten) and similarity(cat, airplane). Which pair is closer in direction? Does it match your intuition about the words?
+
+<Solution>
+
+```python
+print(cosine_similarity(cat, kitten))    # ≈ 0.985
+print(cosine_similarity(cat, airplane))  # ≈ 0.516
+```
+
+cat and kitten point in nearly the same direction in this toy space (cosine ≈ 0.985) — much closer than cat and airplane (≈ 0.516). This is exactly how a real embedding model powers semantic search: rank every candidate by cosine similarity to the query and return the closest directions.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 3 · Reason" title="Spot the dependent vector, by eye">
+
+Three vectors: `u = [1, 2, 3]`, `v = [2, 4, 6]`, `w = [1, 0, 0]`. Without doing full row reduction — using Section 5's independence test and Section 6's definition of rank — answer: (a) which two vectors are linearly dependent, and (b) what is the rank of the 3×3 matrix formed by stacking `u`, `v`, and `w` as rows?
+
+<Solution>
+
+**(a)** `v = 2u` exactly — `v` is just `u` stretched by 2, so `u` and `v` are dependent; they point along the same line and contribute only one direction between them.
+
+**(b)** Row reduction would eliminate `v` entirely (row2 − 2·row1 = zero row), leaving two independent rows: `u` and `w` point in genuinely different directions (neither is a multiple of the other). So the matrix has **rank 2**, not 3 — three rows were written down, but only two independent directions actually exist, exactly the gap LoRA exploits on purpose.
+
+</Solution>
+</WorkTask>
+
+</section>

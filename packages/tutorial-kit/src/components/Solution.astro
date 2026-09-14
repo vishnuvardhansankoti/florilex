@@ -1,0 +1,24 @@
+---
+---
+<details>
+  <summary>Show solution</summary>
+  <slot />
+</details>
+
+<style>
+  details {
+    margin-top: 0.9rem;
+    border-top: 1px solid var(--line-soft);
+    padding-top: 0.8rem;
+  }
+  summary {
+    cursor: pointer;
+    font-family: ui-monospace, monospace;
+    font-size: 0.85rem;
+    color: var(--accent-2);
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+  summary:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 3px; }
+  details[open] summary { margin-bottom: 0.8rem; }
+</style>

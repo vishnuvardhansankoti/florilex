@@ -1,0 +1,9 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+  - "container"
+
+allowBuilds:
+  esbuild: true
+  sharp: false
+  workerd: true

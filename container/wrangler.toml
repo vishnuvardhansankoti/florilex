@@ -1,0 +1,11 @@
+name = "florilex-container"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+
+# Update these after you've created each Cloudflare Pages project —
+# they're the origins the container proxies to and wraps with shared nav.
+# Free tier: every Pages project gets a *.pages.dev URL automatically,
+# no custom domain required.
+[vars]
+AIML_ORIGIN = "https://aiml-tutorials.pages.dev"
+GO_ORIGIN = "https://go-tutorials.pages.dev"

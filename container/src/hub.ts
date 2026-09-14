@@ -1,0 +1,43 @@
+/** Landing page served at "/" — the one route with no upstream series to proxy to. */
+export function renderHub(): Response {
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Florilex — Tutorial Series</title>
+<style>
+  body { margin: 0; background: #0c1013; color: #e7ebed; font-family: Seravek, "Gill Sans Nova", "Segoe UI", Ysabeau, Optima, sans-serif; }
+  .hub { max-width: 720px; margin: 0 auto; padding: 5rem 1.5rem; }
+  h1 { font-family: "Iowan Old Style", Palatino, Georgia, serif; font-size: 2.4rem; margin: 0 0 1rem; }
+  p { color: #a7b1b7; font-size: 1.05rem; line-height: 1.6; }
+  .series { display: flex; flex-direction: column; gap: 1rem; margin-top: 2.5rem; }
+  .series a {
+    display: block;
+    padding: 1.25rem 1.5rem;
+    border: 1px solid #2a3237;
+    border-radius: 10px;
+    color: #e7ebed;
+    text-decoration: none;
+    font-size: 1.05rem;
+  }
+  .series a:hover { border-color: #5cc2b8; }
+  .series small { display: block; color: #748086; font-size: 0.85rem; margin-top: 0.35rem; }
+</style>
+</head>
+<body>
+  <div class="hub">
+    <h1>Florilex</h1>
+    <p>One container, several independently-built tutorial series, composed at the edge.</p>
+    <div class="series">
+      <a href="/aiml/">AI Engineering from Scratch<small>Math foundations through transformer internals.</small></a>
+      <a href="/go/">Go from Scratch<small>The Go language and its runtime, from first principles.</small></a>
+    </div>
+  </div>
+</body>
+</html>`;
+
+  return new Response(html, {
+    headers: { "content-type": "text/html; charset=utf-8" },
+  });
+}

@@ -1,0 +1,8 @@
+---
+// Runs before body paint so the sidebar's stored open/closed state applies
+// without a flash of the opposite state on load.
+---
+<script is:inline>
+  var v = localStorage.getItem("go-sidebar");
+  if (v === "open" || v === "closed") document.documentElement.setAttribute("data-sidebar", v);
+</script>
