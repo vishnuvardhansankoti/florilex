@@ -1,0 +1,72 @@
+---
+import "@florilex/tutorial-kit/tokens.css";
+import "../styles/theme.css";
+import { stripTags } from "@florilex/tutorial-kit/stripTags";
+import Nav from "@florilex/tutorial-kit/components/Nav.astro";
+import Sidebar from "../components/Sidebar.astro";
+import SidebarInit from "../components/SidebarInit.astro";
+
+interface Frontmatter {
+  title: string;
+  subtitle?: string;
+  summary: string;
+  phaseTitle: string;
+  lessonNumber: number;
+  hook?: string;
+  hookCredit?: string;
+  sourceUrl?: string;
+}
+
+interface Props {
+  frontmatter: Frontmatter;
+}
+
+const { frontmatter } = Astro.props;
+const lessonLabel = String(frontmatter.lessonNumber).padStart(2, "0");
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{stripTags(frontmatter.title)} — DSA from Scratch</title>
+    <SidebarInit />
+  </head>
+  <body>
+    <Nav active="dsa" />
+    <div class="shell">
+      <Sidebar currentPath={Astro.url.pathname} />
+      <div class="page lesson-page">
+        <div class="eyebrow">
+          DSA from Scratch <span class="dot">·</span> {frontmatter.phaseTitle}
+          <span class="dot">·</span> Lesson {lessonLabel}
+        </div>
+
+        <h1 class="title" set:html={frontmatter.title} />
+
+        {frontmatter.subtitle && <p class="subtitle" set:html={frontmatter.subtitle} />}
+
+        {frontmatter.hook && (
+          <div class="hook">
+            <Fragment set:html={frontmatter.hook} />
+            {frontmatter.hookCredit && <span class="credit">{frontmatter.hookCredit}</span>}
+          </div>
+        )}
+
+        <section class="page-summary" aria-label="Summary">
+          <h2 class="page-summary-title">Summary</h2>
+          <p>{frontmatter.summary}</p>
+        </section>
+
+        <slot />
+
+        <footer>
+          {frontmatter.sourceUrl && (
+            <>
+              Source reference: <a href={frontmatter.sourceUrl} target="_blank" rel="noopener">{frontmatter.sourceUrl}</a>
+            </>
+          )}
+        </footer>
+      </div>
+    </div>
+  </body>
+</html>

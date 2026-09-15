@@ -1,0 +1,11 @@
+# Always needed:
+pyyaml
+requests
+beautifulsoup4
+
+# Needed only for llm.provider: anthropic
+anthropic
+
+# Needed only for llm.provider: openai, or provider: local with
+# local_api_style: openai
+openai

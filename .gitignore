@@ -6,3 +6,9 @@ site/
 .env
 .DS_Store
 *.log
+__pycache__/
+*.pyc
+scripts/lesson-pipeline/.venv/
+scripts/lesson-pipeline/lesson-sources.yaml
+scripts/lesson-pipeline/lesson-sources.csv
+scripts/lesson-pipeline/lesson-sources.json

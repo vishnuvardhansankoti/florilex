@@ -6,10 +6,12 @@
   "scripts": {
     "dev:aiml": "pnpm --filter @florilex/aiml dev",
     "dev:go": "pnpm --filter @florilex/go dev",
+    "dev:dsa": "pnpm --filter @florilex/dsa dev",
     "build:aiml": "pnpm --filter @florilex/aiml build",
     "build:go": "pnpm --filter @florilex/go build",
+    "build:dsa": "pnpm --filter @florilex/dsa build",
     "build": "pnpm -r --filter=./apps/* build",
-    "deploy": "bash scripts/deploy-firebase.sh"
+    "deploy": "bash scripts/deploy/deploy-firebase.sh"
   },
   "devDependencies": {
     "firebase-tools": "^13.23.0"

@@ -11,18 +11,21 @@ florilex/
   apps/
     aiml/     Astro site, base "/aiml", its own content collection
     go/       Astro site, base "/go", same shape, totally separate content
+    dsa/      Astro site, base "/dsa", same shape, totally separate content
   packages/
     tutorial-kit/   shared components (Callout, Formula, DiagramFigure,
                      WorkTask, Solution, Nav) + the CSS design-token system
   hub/              static landing page ("/") linking to each series
-  scripts/          deploy-firebase.sh — build + assemble + firebase deploy
+  scripts/
+    deploy/         deploy-firebase.sh — build + assemble + firebase deploy
+    lesson-pipeline/  URL -> LLM -> new lesson .mdx (see scripts/lesson-pipeline/README.md)
 ```
 
 Each app under `apps/*` builds to fully static HTML/CSS/JS. Because each
 is built with `base` set to its own mount path (`/aiml`, `/go`), every
 internal link and asset URL it generates is already correctly prefixed.
 
-`scripts/deploy-firebase.sh` builds both apps and assembles them into one
+`scripts/deploy/deploy-firebase.sh` builds both apps and assembles them into one
 `site/` directory alongside the static hub page, then deploys that single
 directory to Firebase Hosting:
 
@@ -53,8 +56,8 @@ pnpm dev:go         # http://localhost:4321/go/...  (different port if run toget
 
 2. **Set the project id**:
    - `.firebaserc` → `projects.default`
-   - `apps/aiml/astro.config.mjs` and `apps/go/astro.config.mjs` → `site`
-     (used for absolute RSS links), set to `https://<project-id>.web.app`
+   - each app's `astro.config.mjs` (`apps/aiml`, `apps/go`, `apps/dsa`) →
+     `site` (used for absolute RSS links), set to `https://<project-id>.web.app`
 
 3. **Log in to Firebase CLI** (first time only): `npx firebase-tools login`
 
@@ -62,10 +65,10 @@ pnpm dev:go         # http://localhost:4321/go/...  (different port if run toget
    ```bash
    pnpm deploy
    ```
-   This builds both apps, assembles `site/`, and runs
+   This builds every app, assembles `site/`, and runs
    `firebase deploy --only hosting`. You get one free
-   `<project-id>.web.app` URL — `/aiml/...` and `/go/...` both work from
-   it.
+   `<project-id>.web.app` URL — `/aiml/...`, `/go/...`, and `/dsa/...`
+   all work from it.
 
 ### CI (GitHub Actions)
 
@@ -82,6 +85,6 @@ needs two repo secrets:
 2. Give it its own `theme.css` accent override if it wants distinct branding.
 3. Add a link to it in `hub/index.html` and in
    `packages/tutorial-kit/src/components/Nav.astro`.
-4. Add a copy step for it in `scripts/deploy-firebase.sh`.
+4. Add a copy step for it in `scripts/deploy/deploy-firebase.sh`.
 
 No existing series is touched by any of this.

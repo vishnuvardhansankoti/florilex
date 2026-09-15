@@ -1,0 +1,144 @@
+/* DSA series identity — same tutorial-kit tokens, different accent pair,
+   proving each series can brand itself without touching shared code. */
+
+:root {
+  --accent: #6d28d9;
+  --accent-2: #b45309;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --accent: #a78bfa;
+    --accent-2: #fbbf24;
+  }
+}
+
+:root[data-theme="dark"] {
+  --accent: #a78bfa;
+  --accent-2: #fbbf24;
+}
+
+/* Lesson pages get a bit more breathing room than the shared 780px default. */
+.page.lesson-page {
+  max-width: 900px;
+}
+
+/* Collapsible sidebar shell -------------------------------------------- */
+
+.shell {
+  display: flex;
+  align-items: flex-start;
+}
+.shell > .page {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sidebar {
+  flex: none;
+  width: 280px;
+  min-height: 100vh;
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+  overflow-y: auto;
+  transition: width 0.2s ease;
+}
+.sidebar-inner {
+  width: 280px;
+  padding: 1.5rem 1.25rem 3rem;
+}
+
+.sidebar-brand {
+  display: block;
+  font-family: "Iowan Old Style", Palatino, Georgia, serif;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--ink);
+  text-decoration: none;
+  margin-bottom: 1.6rem;
+}
+.sidebar-brand em { font-style: italic; color: var(--accent); }
+
+.sidebar-phase { margin-bottom: 1.4rem; }
+.sidebar-phase-title {
+  font-family: ui-monospace, monospace;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-faint);
+  margin-bottom: 0.5rem;
+}
+.sidebar-phase ul { list-style: none; padding: 0; margin: 0; }
+.sidebar-phase li { margin-bottom: 0.15em; }
+.sidebar-link {
+  display: block;
+  padding: 0.35em 0.5em;
+  border-radius: 6px;
+  color: var(--ink-soft);
+  text-decoration: none;
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+.sidebar-link:hover { background: var(--surface-2); color: var(--ink); }
+.sidebar-link.active { background: var(--accent2-soft); color: var(--accent-2); font-weight: 600; }
+
+html[data-sidebar="closed"] .sidebar {
+  width: 0;
+  border-right-color: transparent;
+  overflow: hidden;
+}
+html[data-sidebar="closed"] .sidebar-inner { padding-left: 0; padding-right: 0; }
+
+.sidebar-toggle {
+  position: fixed;
+  top: 1.1rem;
+  left: calc(280px + 1.1rem);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  width: 2.2rem;
+  height: 2.2rem;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  cursor: pointer;
+  transition: left 0.2s ease;
+}
+.sidebar-toggle-bar { display: block; height: 2px; margin: 0 0.5rem; background: var(--ink-soft); border-radius: 1px; }
+html[data-sidebar="closed"] .sidebar-toggle { left: 1.1rem; }
+
+.sidebar-backdrop { display: none; }
+
+@media (max-width: 860px) {
+  .shell { display: block; }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 280px;
+    transform: translateX(-100%);
+    z-index: 30;
+    box-shadow: var(--shadow);
+    transition: transform 0.2s ease;
+  }
+  html[data-sidebar="closed"] .sidebar { width: 280px; border-right-color: var(--line); }
+  html[data-sidebar="open"] .sidebar { transform: translateX(0); }
+
+  .sidebar-toggle { left: 1.1rem; }
+
+  html[data-sidebar="open"] .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 25;
+  }
+}

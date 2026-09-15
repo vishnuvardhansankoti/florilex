@@ -11,14 +11,17 @@ florilex/
   apps/
     aiml/     Astro site, base "/aiml", its own content collection + deploy
     go/       Astro site, base "/go", same shape, totally separate content
+    dsa/      Astro site, base "/dsa", same shape, totally separate content
   packages/
     tutorial-kit/   shared components (Callout, Formula, DiagramFigure,
                      WorkTask, Solution, Nav) + the CSS design-token system
   hub/              static landing page ("/") linking to each series
-  scripts/          deploy-firebase.sh — build + assemble + firebase deploy
+  scripts/
+    deploy/         deploy-firebase.sh — build + assemble + firebase deploy
+    lesson-pipeline/  URL -> LLM -> new lesson .mdx (see scripts/lesson-pipeline/README.md)
 ```
 
-Each app under `apps/*` builds to fully static HTML/CSS/JS (`astro build`, `output: "static"`). Because each is built with `base` set to its own mount path (`/aiml`, `/go` in `astro.config.mjs`), every internal link and asset URL it generates is already prefixed with that path. `scripts/deploy-firebase.sh` assembles all of them into one `site/` directory before deploying:
+Each app under `apps/*` builds to fully static HTML/CSS/JS (`astro build`, `output: "static"`). Because each is built with `base` set to its own mount path (`/aiml`, `/go` in `astro.config.mjs`), every internal link and asset URL it generates is already prefixed with that path. `scripts/deploy/deploy-firebase.sh` assembles all of them into one `site/` directory before deploying:
 
 ```
 site/index.html   <- hub/index.html          (served at /)
@@ -45,12 +48,12 @@ pnpm build:go
 pnpm build           # builds all apps/* in the workspace
 
 # Deploy (free tier — Firebase Hosting Spark plan)
-pnpm deploy          # scripts/deploy-firebase.sh: build, assemble site/, firebase deploy
+pnpm deploy          # scripts/deploy/deploy-firebase.sh: build, assemble site/, firebase deploy
 ```
 
-Deploying requires a Firebase project (Spark/free plan is sufficient — this is a static site, no Cloud Functions involved) with Hosting enabled. Set the project id in `.firebaserc` (`projects.default`), and update the `site` URL in both apps' `astro.config.mjs` to the real Firebase Hosting URL (`https://<project-id>.web.app`) once created. `scripts/deploy-firebase.sh` also honors a `FIREBASE_PROJECT_ID` env var if you want to override the `.firebaserc` default (used by CI). Firebase CLI auth: `firebase login` locally, or a service account JSON via `GOOGLE_APPLICATION_CREDENTIALS` in CI (see `.github/workflows/deploy-firebase.yml`).
+Deploying requires a Firebase project (Spark/free plan is sufficient — this is a static site, no Cloud Functions involved) with Hosting enabled. Set the project id in `.firebaserc` (`projects.default`), and update the `site` URL in both apps' `astro.config.mjs` to the real Firebase Hosting URL (`https://<project-id>.web.app`) once created. `scripts/deploy/deploy-firebase.sh` also honors a `FIREBASE_PROJECT_ID` env var if you want to override the `.firebaserc` default (used by CI). Firebase CLI auth: `firebase login` locally, or a service account JSON via `GOOGLE_APPLICATION_CREDENTIALS` in CI (see `.github/workflows/deploy-firebase.yml`).
 
-## Content architecture (apps/aiml, apps/go)
+## Content architecture (apps/aiml, apps/go, apps/dsa)
 
 Each series app is an Astro content-collection site:
 
@@ -74,6 +77,6 @@ Frontmatter fields like `title` and `subtitle` intentionally carry raw inline HT
 1. Copy `apps/go` to `apps/<series>`, change `base` in its `astro.config.mjs`.
 2. Give it its own `theme.css` accent override if it wants distinct branding.
 3. Add a link to it in `hub/index.html`, and a link/id to `Nav.astro` in `packages/tutorial-kit/src/components/Nav.astro`.
-4. Add `site/aiml/...` -> `site/<series>/...` copy step to `scripts/deploy-firebase.sh`.
+4. Add `site/aiml/...` -> `site/<series>/...` copy step to `scripts/deploy/deploy-firebase.sh`.
 
 No existing series is touched by any of this — each app's build and content are fully independent; they're only combined at the final "assemble `site/`" deploy step.

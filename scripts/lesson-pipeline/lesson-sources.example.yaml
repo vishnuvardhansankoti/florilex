@@ -1,0 +1,30 @@
+# Copy this to lesson-sources.yaml (gitignored — it'll accumulate your own
+# reading list and processed-status history) and fill in real URLs.
+#
+# Run with:
+#   python3 scripts/lesson-pipeline/generate_lesson.py --config scripts/lesson-pipeline/lesson-sources.yaml
+#
+# Each run processes exactly one URL: the first entry whose status isn't
+# "processed". See scripts/lesson-pipeline/README.md for the full schema.
+
+llm:
+  provider: anthropic       # anthropic | openai | local
+  model: claude-sonnet-5
+  api_key_env: ANTHROPIC_API_KEY   # ignored for provider: local
+  enable_web_search: true          # server-side web search (anthropic/openai only)
+  max_tokens: 8000
+  # base_url: http://localhost:11434   # required for provider: local (Ollama)
+  # local_api_style: ollama            # ollama | openai (provider: local only)
+
+urls:
+  - url: "https://example.com/an-article-about-attention"
+    topic: aiml
+    status: pending
+    # Optional overrides — omit to let the LLM propose a phase and let the
+    # script compute order/lessonNumber from what's already in apps/aiml:
+    # phase: "02-attention"
+    # phaseTitle: "Phase 02 — Attention"
+
+  - url: "https://go.dev/blog/some-post"
+    topic: go
+    status: pending

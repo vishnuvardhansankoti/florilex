@@ -1,0 +1,241 @@
+---
+title: 'Big-O Notation: <em>Reading the Growth Curve</em>'
+subtitle: Before you write a line of code, the size of the input should already tell
+  you which algorithms are even allowed to compete.
+summary: This lesson introduces Big-O as a tool for predicting whether an algorithm
+  will finish in time, before any code exists to measure. It covers the formal meaning
+  of O, Ω, and Θ, the three rules that simplify almost any bound (drop constants,
+  drop lower-order terms, assume worst case), and why the constant a bound hides can
+  still decide the winner for small inputs. It closes with amortized analysis, using
+  a dynamic array's doubling strategy to show how an occasionally-expensive operation
+  can still average out to O(1).
+phase: 00-foundations
+phaseTitle: Phase 00 — Foundations
+order: 1
+lessonNumber: 1
+pubDate: '2026-09-14'
+hook: A billion items at one nanosecond each is already a full second of CPU time
+  — before any real work happens.
+hookCredit: — the arithmetic behind every O(n) vs. O(log n) decision
+sourceUrl: https://dsa.handbook.academy/curriculum/foundations/complexity-big-o/
+---
+
+import Callout from "@florilex/tutorial-kit/components/Callout.astro";
+import Formula from "@florilex/tutorial-kit/components/Formula.astro";
+import DiagramFigure from "@florilex/tutorial-kit/components/DiagramFigure.astro";
+import WorkTask from "@florilex/tutorial-kit/components/WorkTask.astro";
+import Solution from "@florilex/tutorial-kit/components/Solution.astro";
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">1</span><h2 class="sec-title">Why growth rate, not runtime</h2></div>
+
+Suppose a problem tells you the input can be as large as `n = 10^9` — a billion. A single pass over the input, touching each element once, sounds cheap. It isn't. At roughly one nanosecond per operation on real hardware, a billion operations is a full second of raw CPU time, before you've paid for cache misses, memory allocation, or anything the loop actually does. Ten to thirty seconds is a realistic wall-clock number for a real linear scan at that size. If the time budget is one second, `O(n)` already doesn't fit — you need `O(log n)`, a closed-form formula, or a precomputed answer.
+
+This is the actual use of Big-O: not a grade you assign an algorithm after building it, but arithmetic you do *before* writing any code, once you know how large the input can get. A constraint like `n <= 10^5` silently rules out `O(n^2)`. A constraint like `n <= 20` silently allows `O(2^n)`. Every algorithm design decision downstream of this lesson starts by reading the constraint and asking which complexity classes are even in the running.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">2</span><h2 class="sec-title">Reading O, Ω, and Θ precisely</h2></div>
+
+Big-O describes an **upper bound** on growth: how badly an algorithm could do, at worst, once the input is large enough that constant setup costs stop mattering.
+
+<Formula name="Big-O (upper bound)">
+f(n) = O(g(n)) if there exist constants c > 0 and n₀ such that f(n) ≤ c·g(n) for all n ≥ n₀
+</Formula>
+
+Read it as: *eventually, f never grows faster than some constant multiple of g*. The `=` here is really "is" — `n = O(n^2)` is a true statement (n is *at most* quadratic), but flipping it, `O(n^2) = n`, is nonsense. Big-O membership is one-directional.
+
+Big-Omega is the mirror image: a **lower bound**, promising f grows *at least* as fast as g, eventually.
+
+<Formula name="Big-Ω (lower bound)">
+f(n) = Ω(g(n)) if there exist constants c > 0 and n₀ such that f(n) ≥ c·g(n) for all n ≥ n₀
+</Formula>
+
+Big-Theta is what you get when both bounds meet — a **tight bound**, pinning f to the *same* growth rate as g, not just above or below it:
+
+<Formula name="Big-Θ (tight bound)">
+f(n) = Θ(g(n)) if there exist constants c₁, c₂ > 0 and n₀ such that c₁·g(n) ≤ f(n) ≤ c₂·g(n) for all n ≥ n₀
+</Formula>
+
+Notice that Θ isn't a third, independent idea — it's just "both O and Ω hold, against the same g, with the same n₀." That's why `f(n) = Θ(g(n))` is logically equivalent to `f(n) = O(g(n))` *and* `f(n) = Ω(g(n))`. Saying an algorithm is `Θ(n log n)` is a strictly stronger, more complete claim than saying it's `O(n log n)` — the second only promises it's not *worse* than n log n, and leaves the door open for it to secretly be faster (say, actually `O(n)`). In practice, most claims you'll read and write are Big-O, because the upper bound is usually the fact that matters for planning: "this won't take longer than roughly n log n steps," full stop.
+
+<DiagramFigure caption="Big-O bounds f(n) from above, Big-Ω bounds it from below, and Big-Θ pins it between two scaled copies of g(n) — in every case, the bound only has to hold once n reaches n₀. Before that point, f(n) is free to do anything.">
+<svg viewBox="0 0 700 210" role="img" aria-label="Three side-by-side graphs. The first shows f(n) crossing below a rising bound curve c·g(n) after a threshold n0, illustrating Big-O. The second shows f(n) crossing above a bound curve after n0, illustrating Big-Omega. The third shows f(n) squeezed between a lower and upper scaled copy of g(n) after n0, illustrating Big-Theta.">
+  <g transform="translate(0,0)">
+    <text x="115" y="14" font-size="12" fill="currentColor" text-anchor="middle" font-family="ui-monospace, monospace">O — upper bound</text>
+    <rect x="110" y="20" width="90" height="150" fill="var(--accent2-soft)"></rect>
+    <line x1="30" y1="20" x2="30" y2="170" stroke="var(--line)" stroke-width="1"></line>
+    <line x1="30" y1="170" x2="200" y2="170" stroke="var(--line)" stroke-width="1"></line>
+    <line x1="110" y1="20" x2="110" y2="170" stroke="var(--ink-faint)" stroke-width="1" stroke-dasharray="3 3"></line>
+    <text x="110" y="184" font-size="10" fill="var(--ink-faint)" text-anchor="middle" font-family="ui-monospace, monospace">n₀</text>
+    <polyline points="30,160 60,140 90,115 110,100 140,75 170,50 200,18" fill="none" stroke="var(--accent-2)" stroke-width="2"></polyline>
+    <text x="150" y="42" font-size="10" fill="var(--accent-2)" font-family="ui-monospace, monospace">c·g(n)</text>
+    <polyline points="30,155 50,120 70,150 90,105 110,100 140,90 170,65 200,35" fill="none" stroke="currentColor" stroke-width="2.5"></polyline>
+    <text x="150" y="98" font-size="10" fill="currentColor" font-family="ui-monospace, monospace">f(n)</text>
+  </g>
+  <g transform="translate(250,0)">
+    <text x="115" y="14" font-size="12" fill="currentColor" text-anchor="middle" font-family="ui-monospace, monospace">Ω — lower bound</text>
+    <rect x="110" y="20" width="90" height="150" fill="var(--accent2-soft)"></rect>
+    <line x1="30" y1="20" x2="30" y2="170" stroke="var(--line)" stroke-width="1"></line>
+    <line x1="30" y1="170" x2="200" y2="170" stroke="var(--line)" stroke-width="1"></line>
+    <line x1="110" y1="20" x2="110" y2="170" stroke="var(--ink-faint)" stroke-width="1" stroke-dasharray="3 3"></line>
+    <text x="110" y="184" font-size="10" fill="var(--ink-faint)" text-anchor="middle" font-family="ui-monospace, monospace">n₀</text>
+    <polyline points="30,160 60,148 90,135 110,128 140,112 170,95 200,75" fill="none" stroke="var(--accent-2)" stroke-width="2"></polyline>
+    <text x="150" y="120" font-size="10" fill="var(--accent-2)" font-family="ui-monospace, monospace">c·g(n)</text>
+    <polyline points="30,158 50,165 70,140 90,150 110,128 140,95 170,65 200,30" fill="none" stroke="currentColor" stroke-width="2.5"></polyline>
+    <text x="150" y="55" font-size="10" fill="currentColor" font-family="ui-monospace, monospace">f(n)</text>
+  </g>
+  <g transform="translate(500,0)">
+    <text x="115" y="14" font-size="12" fill="currentColor" text-anchor="middle" font-family="ui-monospace, monospace">Θ — tight bound</text>
+    <rect x="110" y="20" width="90" height="150" fill="var(--accent2-soft)"></rect>
+    <line x1="30" y1="20" x2="30" y2="170" stroke="var(--line)" stroke-width="1"></line>
+    <line x1="30" y1="170" x2="200" y2="170" stroke="var(--line)" stroke-width="1"></line>
+    <line x1="110" y1="20" x2="110" y2="170" stroke="var(--ink-faint)" stroke-width="1" stroke-dasharray="3 3"></line>
+    <text x="110" y="184" font-size="10" fill="var(--ink-faint)" text-anchor="middle" font-family="ui-monospace, monospace">n₀</text>
+    <polyline points="30,150 60,130 90,108 110,95 140,72 170,48 200,20" fill="none" stroke="var(--accent-2)" stroke-width="2" stroke-dasharray="4 3"></polyline>
+    <text x="160" y="35" font-size="10" fill="var(--accent-2)" font-family="ui-monospace, monospace">c₂·g(n)</text>
+    <polyline points="30,160 60,148 90,133 110,122 140,102 170,80 200,55" fill="none" stroke="var(--accent)" stroke-width="2" stroke-dasharray="4 3"></polyline>
+    <text x="160" y="98" font-size="10" fill="var(--accent)" font-family="ui-monospace, monospace">c₁·g(n)</text>
+    <polyline points="30,155 60,139 90,120 110,108 140,87 170,64 200,37" fill="none" stroke="currentColor" stroke-width="2.5"></polyline>
+    <text x="150" y="70" font-size="10" fill="currentColor" font-family="ui-monospace, monospace">f(n)</text>
+  </g>
+</svg>
+</DiagramFigure>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">3</span><h2 class="sec-title">Comparing the three bounds on the same function</h2></div>
+
+Definitions are easier to trust once you've plugged real functions into them. Take `f(n) = 3n² + 5n + 2` against `g(n) = n²`:
+
+- **Is f = O(n²)?** Pick `c = 10` and `n₀ = 1`. For every `n ≥ 1`: `n ≤ n²` and `1 ≤ n²`, so `3n² + 5n + 2 ≤ 3n² + 5n² + 2n² = 10n²`. Yes — `f = O(n²)`.
+- **Is f = Ω(n²)?** Pick `c = 1` and `n₀ = 0`. Since `5n + 2 ≥ 0` for all `n ≥ 0`, we get `3n² + 5n + 2 ≥ 3n² ≥ n²` immediately. Yes — `f = Ω(n²)`.
+- Both bounds hold against the *same* `g(n) = n²`, so `f = Θ(n²)`. This is the common case: most algorithms you'll analyze have a single natural growth rate, and it's both their O and their Ω.
+
+Now swap in a `g(n)` that doesn't match, to see why Θ isn't automatic. Take `f(n) = n²` against `g(n) = n`:
+
+- **Is n² = O(n)?** That would require `n² ≤ c·n`, i.e. `n ≤ c`, to hold for *every* `n` past some `n₀` — impossible, since `n` grows without bound and `c` is fixed. No.
+- **Is n² = Ω(n)?** That requires `n² ≥ c·n`, i.e. `n ≥ c` — true for `n ≥ c`, so pick `c = 1`, `n₀ = 1`. Yes.
+- `n²` is `Ω(n)` but *not* `O(n)`, so it is **not** `Θ(n)`. Having a lower bound against some `g` tells you nothing about whether you also have a matching upper bound against that same `g` — you have to check both.
+
+| f(n) | g(n) | O(g)? | Ω(g)? | Θ(g)? |
+|---|---|---|---|---|
+| `3n² + 5n + 2` | `n²` | Yes | Yes | **Yes** |
+| `n²` | `n` | No | Yes | No |
+| `n` | `n²` | Yes | No | No |
+| `n log n` | `n` | No | Yes | No |
+| `n log n` | `n log n` | Yes | Yes | **Yes** |
+
+The pattern in that table is the whole idea in one glance: **Θ only lands on the diagonal**, where `f` and `g` genuinely grow at the same rate. Off the diagonal, at most one of O or Ω can hold — never both, and never Θ.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">4</span><h2 class="sec-title">Three rules that do almost all the work</h2></div>
+
+You rarely need the formal definition day-to-day. Three simplification rules cover nearly every bound you'll compute:
+
+1. **Drop the constants.** `7n + 100` is `O(n)`. A constant multiplier or additive offset doesn't change the *shape* of the growth curve, only how steep it is.
+2. **Drop the lower-order terms.** `n^2 + n\log n + 50` is `O(n^2)`. As `n` grows, the `n^2` term swallows everything else — it's the only one that matters in the limit.
+3. **Assume the worst case**, unless a problem explicitly asks for average-case or expected complexity. "This algorithm is `O(n)`" almost always means "in the worst input you could hand it."
+
+A small set of growth rates covers nearly everything you'll classify an algorithm as:
+
+| Class | Notation | Typical example |
+|---|---|---|
+| Constant | `O(1)` | Reading `arr[i]` by index |
+| Logarithmic | `O(log n)` | Binary search on a sorted array |
+| Linear | `O(n)` | A single pass summing a list |
+| Linearithmic | `O(n log n)` | Merge sort, heapsort |
+| Quadratic | `O(n^2)` | Comparing every pair in a list |
+| Exponential | `O(2^n)` | Enumerating every subset |
+
+The gap between rows is not gentle. At `n = 100`, an `O(2^n)` algorithm needs more steps than there are atoms in the observable universe, while `O(n log n)` is still comfortably fast. Lower-order terms stop mattering long before higher-order ones become catastrophic — which is exactly why rule 2 is safe to apply.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">5</span><h2 class="sec-title">Why the hidden constant still matters</h2></div>
+
+Big-O correctly predicts which algorithm wins *eventually* — and says nothing about what happens before "eventually." An `O(n)` algorithm with a large constant factor can lose to an `O(n^2)` algorithm with a tiny one, for a wide range of realistic input sizes.
+
+This is exactly why real sorting libraries are hybrids. Merge sort is `Θ(n log n)`, asymptotically better than insertion sort's `Θ(n^2)` — but insertion sort's inner loop is just a handful of comparisons and shifts, while merge sort pays for allocation and extra reads/writes at every level of recursion. For small enough `n` (production sort routines typically draw the line somewhere around a few dozen elements), insertion sort's tiny constant wins outright. That's why languages like Java and Python switch to insertion sort for short runs and only bring in the divide-and-conquer machinery once the input is large enough for the asymptotic advantage to pay for its own overhead.
+
+<Callout label="Takeaway">
+Big-O tells you who wins the race if it runs forever. It doesn't tell you who's ahead at the finish line you actually care about. When a constraint says the input is tiny, the "worse" algorithm can be the right engineering choice.
+</Callout>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">6</span><h2 class="sec-title">Amortized cost: sometimes expensive, cheap on average</h2></div>
+
+Worst-case-per-operation analysis breaks down for data structures where most operations are cheap and a few are expensive. A dynamic array (the kind behind Python's `list` or Java's `ArrayList`) is the canonical example. Pushing an element is usually `O(1)` — just write into the next free slot. But when the backing array is full, a push has to allocate a new array (typically double the size) and copy every existing element into it, which is `O(n)` for that one push.
+
+So what's the real cost of "push," averaged over a long sequence? Suppose the array starts at capacity 1 and doubles every time it fills. Over `n` pushes, resizes happen at sizes `1, 2, 4, 8, ..., n/2`, copying `1 + 2 + 4 + ... + n/2` elements in total. That's a geometric series that sums to just under `n` — specifically `n - 1`. Add the `n` individual `O(1)` writes, and the total work across `n` pushes is `O(n)`, not `O(n^2)`. Divide by `n` pushes, and the **amortized** cost per push is `O(1)` — even though some individual pushes are genuinely `O(n)` in the moment.
+
+<Callout label="Careful" variant="warn">
+Amortized O(1) is a statement about the average over a sequence, not a guarantee about any single call. A system with a hard per-operation deadline — audio processing, an embedded control loop — can still be broken by the one push that triggers a resize, even though the amortized bound looks perfectly safe on paper.
+</Callout>
+
+</section>
+
+<WorkTask label="Task 1 · Classify" title="Name the growth rate">
+
+For each snippet, give its Big-O in terms of `n = len(items)`:
+
+```python
+# (a)
+total = 0
+for x in items:
+    total += x
+
+# (b)
+pairs = []
+for i in range(len(items)):
+    for j in range(i + 1, len(items)):
+        pairs.append((items[i], items[j]))
+
+# (c)
+lo, hi = 0, len(items) - 1
+while lo <= hi:
+    mid = (lo + hi) // 2
+    if items[mid] == target:
+        break
+    elif items[mid] < target:
+        lo = mid + 1
+    else:
+        hi = mid - 1
+```
+
+<Solution>
+
+**(a)** `O(n)` — one pass, one addition per element.
+
+**(b)** `O(n^2)` — the inner loop's range shrinks each time, but the total number of pairs visited is `n(n-1)/2`, and dropping the constant and lower-order term leaves `O(n^2)`.
+
+**(c)** `O(log n)` — this is binary search: each iteration discards half of the remaining range, so the loop runs at most `log₂ n` times.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 2 · Apply amortized analysis" title="Total cost of 16 pushes into a doubling array">
+
+A dynamic array starts at capacity 1 and doubles (copying every existing element into the new array) whenever a push arrives with no free slot. You push 16 elements, one at a time, starting from empty.
+
+(a) At which push numbers does a resize happen, and how many elements get copied each time?
+(b) What is the total number of copy operations across all 16 pushes?
+(c) Using the aggregate method (total cost ÷ number of operations), what's the amortized cost per push?
+
+<Solution>
+
+**(a)** Resizes happen when the array is full and a new push arrives — at capacities 1, 2, 4, and 8, copying 1, 2, 4, and 8 elements respectively (the doubling happens right before pushes 2, 3, 5, and 9).
+
+**(b)** Total copies: `1 + 2 + 4 + 8 = 15`. Every one of the 16 pushes also does its own `O(1)` write, so total work is `15 + 16 = 31` basic operations.
+
+**(c)** Amortized cost per push: `31 / 16 ≈ 1.94`, which is `O(1)` — a constant independent of `n`. As `n` grows, the copy total approaches `n - 1` and the amortized cost per push approaches a small constant, exactly matching the general geometric-series result from Section 6.
+
+</Solution>
+</WorkTask>

@@ -1,0 +1,87 @@
+---
+import { getCollection } from "astro:content";
+import { stripTags } from "@florilex/tutorial-kit/stripTags";
+
+interface Props {
+  currentPath?: string;
+}
+
+const { currentPath } = Astro.props;
+const normalize = (p: string) => p.replace(/\/$/, "");
+
+const lessons = (await getCollection("lessons")).sort((a, b) => a.data.order - b.data.order);
+
+const phases = new Map<string, typeof lessons>();
+for (const lesson of lessons) {
+  const key = lesson.data.phase;
+  if (!phases.has(key)) phases.set(key, []);
+  phases.get(key)!.push(lesson);
+}
+---
+<aside class="sidebar" id="sidebar" aria-label="Lesson navigation">
+  <div class="sidebar-inner">
+    <a class="sidebar-brand" href="/dsa/">DSA <em>from Scratch</em></a>
+    <nav>
+      {[...phases.entries()].map(([, phaseLessons]) => (
+        <div class="sidebar-phase">
+          <div class="sidebar-phase-title">{phaseLessons[0].data.phaseTitle}</div>
+          <ul>
+            {phaseLessons.map((lesson) => {
+              const href = `/dsa/phases/${lesson.slug.replace(/^phases\//, "")}`;
+              const active = currentPath !== undefined && normalize(currentPath) === normalize(href);
+              return (
+                <li>
+                  <a class:list={["sidebar-link", { active }]} href={href} aria-current={active ? "page" : undefined}>
+                    {String(lesson.data.lessonNumber).padStart(2, "0")} — {stripTags(lesson.data.title)}
+                  </a>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ))}
+    </nav>
+  </div>
+</aside>
+<button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-label="Toggle sidebar" aria-controls="sidebar">
+  <span class="sidebar-toggle-bar"></span>
+  <span class="sidebar-toggle-bar"></span>
+  <span class="sidebar-toggle-bar"></span>
+</button>
+<div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
+<script is:inline>
+  (function () {
+    var STORAGE_KEY = "dsa-sidebar";
+    var html = document.documentElement;
+    var btn = document.getElementById("sidebar-toggle");
+    var backdrop = document.getElementById("sidebar-backdrop");
+    var mq = window.matchMedia("(max-width: 860px)");
+
+    function isVisible() {
+      var explicit = html.getAttribute("data-sidebar");
+      if (explicit === "open") return true;
+      if (explicit === "closed") return false;
+      return !mq.matches;
+    }
+
+    function setVisible(visible) {
+      var next = visible ? "open" : "closed";
+      html.setAttribute("data-sidebar", next);
+      localStorage.setItem(STORAGE_KEY, next);
+      if (btn) btn.setAttribute("aria-expanded", String(visible));
+    }
+
+    if (btn) {
+      btn.setAttribute("aria-expanded", String(isVisible()));
+      btn.addEventListener("click", function () {
+        setVisible(!isVisible());
+      });
+    }
+    if (backdrop) {
+      backdrop.addEventListener("click", function () {
+        setVisible(false);
+      });
+    }
+  })();
+</script>

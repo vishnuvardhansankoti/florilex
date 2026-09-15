@@ -1,12 +1,13 @@
 ---
 interface Props {
-  active: "aiml" | "go";
+  active: "aiml" | "go" | "dsa";
 }
 const { active } = Astro.props;
 
 const links = [
   { id: "aiml", label: "AIML", href: "/aiml/" },
   { id: "go", label: "Go", href: "/go/" },
+  { id: "dsa", label: "DSA", href: "/dsa/" },
 ] as const;
 ---
 <nav class="florilex-nav">
