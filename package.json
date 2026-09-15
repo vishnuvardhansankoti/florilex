@@ -7,9 +7,11 @@
     "dev:aiml": "pnpm --filter @florilex/aiml dev",
     "dev:go": "pnpm --filter @florilex/go dev",
     "dev:dsa": "pnpm --filter @florilex/dsa dev",
+    "dev:system-design": "pnpm --filter @florilex/system-design dev",
     "build:aiml": "pnpm --filter @florilex/aiml build",
     "build:go": "pnpm --filter @florilex/go build",
     "build:dsa": "pnpm --filter @florilex/dsa build",
+    "build:system-design": "pnpm --filter @florilex/system-design build",
     "build": "pnpm -r --filter=./apps/* build",
     "deploy": "bash scripts/deploy/deploy-firebase.sh"
   },

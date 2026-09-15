@@ -1,0 +1,58 @@
+---
+import { getCollection } from "astro:content";
+import "@florilex/tutorial-kit/tokens.css";
+import "../styles/theme.css";
+import { stripTags } from "@florilex/tutorial-kit/stripTags";
+import Nav from "@florilex/tutorial-kit/components/Nav.astro";
+import Sidebar from "../components/Sidebar.astro";
+import SidebarInit from "../components/SidebarInit.astro";
+
+const lessons = (await getCollection("lessons")).sort((a, b) => a.data.order - b.data.order);
+
+const phases = new Map<string, typeof lessons>();
+for (const lesson of lessons) {
+  const key = lesson.data.phase;
+  if (!phases.has(key)) phases.set(key, []);
+  phases.get(key)!.push(lesson);
+}
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>System Design from Scratch — Tutorials</title>
+    <link rel="alternate" type="application/rss+xml" title="System Design from Scratch" href="/system-design/rss.xml" />
+    <SidebarInit />
+  </head>
+  <body>
+    <Nav active="system-design" />
+    <div class="shell">
+      <Sidebar currentPath={Astro.url.pathname} />
+      <div class="page">
+        <div class="eyebrow">System Design from Scratch</div>
+        <h1 class="title">System Design, <em>from Scratch</em></h1>
+        <p class="subtitle">
+          Detailed, from-scratch tutorials on distributed systems and how to
+          reason about scale, reliability, and tradeoffs — one phase at a time.
+        </p>
+
+        {[...phases.entries()].map(([phase, phaseLessons]) => (
+          <section class="lesson">
+            <div class="sec-head">
+              <h2 class="sec-title">{phaseLessons[0].data.phaseTitle}</h2>
+            </div>
+            <ul>
+              {phaseLessons.map((lesson) => (
+                <li>
+                  <a href={`/system-design/phases/${lesson.slug.replace(/^phases\//, "")}`}>
+                    Lesson {String(lesson.data.lessonNumber).padStart(2, "0")} — {stripTags(lesson.data.title)}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ))}
+      </div>
+    </div>
+  </body>
+</html>

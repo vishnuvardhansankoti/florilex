@@ -1,0 +1,178 @@
+---
+title: 'Networking Fundamentals: <em>The Wire Underneath the Diagram</em>'
+subtitle: Every box-and-arrow system design diagram is a claim about round trips,
+  and round trips are the one cost no amount of good code can hide.
+summary: 'This lesson builds the practical networking vocabulary that every system
+  design conversation assumes: which OSI layers a designer actually touches (4 and
+  7), the TCP-vs-UDP tradeoff and why it drives protocol choice, the stacked round
+  trips (DNS, TCP, TLS) that tax every first connection, how HTTP evolved across three
+  versions to fight head-of-line blocking, DNS as a distributed cache with a tunable
+  staleness dial, and how to choose between long polling, SSE, and WebSockets for
+  real-time features. It closes with a worked capacity example — a live sports-score
+  app at 10 million concurrent viewers — to show the framework applied end to end.'
+phase: 00-networking-fundamentals
+phaseTitle: Phase 00 — Networking Fundamentals
+order: 1
+lessonNumber: 1
+pubDate: '2026-09-15'
+hook: A database can be perfectly indexed and a service perfectly stateless, and the
+  request will still lose 200 milliseconds to nothing but the network saying hello.
+hookCredit: — the tax every request pays before any code runs
+sourceUrl: https://hld.handbook.academy/curriculum/prerequisites/networking-fundamentals/
+---
+
+import Callout from "@florilex/tutorial-kit/components/Callout.astro";
+import Formula from "@florilex/tutorial-kit/components/Formula.astro";
+import WorkTask from "@florilex/tutorial-kit/components/WorkTask.astro";
+import Solution from "@florilex/tutorial-kit/components/Solution.astro";
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">1</span><h2 class="sec-title">Where a system designer actually touches the stack</h2></div>
+
+The OSI model has seven layers, but system design conversations live almost entirely in two of them: **Layer 4 (Transport)** and **Layer 7 (Application)**. Layer 4 is where TCP and UDP operate — a Layer 4 load balancer (an NLB, in AWS terms) sees only IP addresses, ports, and the protocol; it doesn't parse anything above that, so it can forward packets almost as fast as it can read them, at the cost of understanding nothing about the request itself. Layer 7 is where HTTP lives — a Layer 7 load balancer (an ALB) terminates the connection, parses the HTTP request, and can route on the path, the header, or the cookie inside it. That extra parsing is why an ALB can do path-based routing (`/api/*` to one fleet, `/static/*` to another) and an NLB cannot; it's also why L4 and L7 load balancers default to very different idle-connection timeouts — an NLB will typically hold an idle TCP connection open for 350 seconds because it has no idea whether the application still considers it alive, while an ALB defaults to 60 seconds because it understands HTTP well enough to know a request has actually finished.
+
+The two intermediate layers — Network (IP) and Data Link (Ethernet) — matter for the same reason ambient plumbing matters: you don't design against them directly, but every latency number in this lesson (round-trip times, throughput ceilings) is downstream of decisions made at those layers by your cloud provider or network engineers, not by your application code.
+
+<Callout label="Takeaway">
+When a system design problem says "put a load balancer in front of it," the very next question is L4 or L7 — and the answer is almost always L7 unless the workload is raw TCP (a database proxy, a game server) that has no HTTP semantics to route on.
+</Callout>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">2</span><h2 class="sec-title">TCP vs UDP: buying reliability with a round trip</h2></div>
+
+TCP and UDP solve the same problem — get bytes from one machine to another — with opposite defaults. **TCP** establishes a connection with a three-way handshake before any application data moves, then guarantees the receiver sees every byte, in order, exactly once, retransmitting anything lost. That guarantee costs a full round trip (1 RTT) before the first useful byte can be sent, plus ongoing overhead to track acknowledgments and manage retransmission. **UDP** sends packets with no handshake, no ordering guarantee, and no retransmission — a packet either arrives or it silently doesn't, and it's entirely the application's job to notice and decide what to do about it.
+
+The decision rule is almost never about which protocol is "better" — it's about which failure mode your application can tolerate. Use **TCP** when correctness matters more than the extra round trip: HTTP requests, database connections, file transfers, SSH sessions — anywhere a dropped or reordered byte would be a correctness bug, not a cosmetic glitch. Use **UDP** when a lost packet is cheap to ignore or you specifically want to build a custom reliability scheme tuned to your workload: DNS queries (just retry the whole question if no answer arrives), video and voice calls (a dropped frame is a barely-noticeable blip; waiting for a retransmit would be worse than skipping it), and game state updates (this frame's position is superseded by the next one arriving 16ms later anyway, so retransmitting a stale packet is pure waste). QUIC — the transport underneath HTTP/3 — takes this UDP-and-build-your-own-reliability approach and applies it specifically to web traffic, which is the subject of the next section.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">3</span><h2 class="sec-title">The first-connection tax: three round trips before a single byte</h2></div>
+
+Before a client and server exchange any application data over HTTPS, three separate handshakes each cost roughly one round trip: a DNS lookup to resolve the hostname to an IP, a TCP handshake to establish the connection, and a TLS handshake to negotiate encryption. None of these can be skipped, and — on a first connection with no cached DNS answer and no session resumption — none of them can be pipelined with each other, because each one needs the result of the one before it.
+
+<Formula name="First-connection cost, cold">
+Total setup time ≈ RTT(DNS) + RTT(TCP handshake) + RTT(TLS handshake)
+</Formula>
+
+On a transatlantic route (New York to London), the speed of light in fiber sets a theoretical floor of roughly 56–62 ms one-way-equivalent for this kind of round-trip chain; real-world routing, switching, and processing overhead typically bring the actual number to 70–90 ms per RTT. Stack three of those and a client can lose close to 300 ms before the server has processed a single byte of the actual request — a cost that's completely invisible to any amount of backend optimization, because it happens before the backend is even involved.
+
+TLS itself has gotten cheaper over time specifically by attacking this stacking problem: TLS 1.2 needed 2 full round trips to negotiate a cipher suite and exchange keys, while TLS 1.3 collapses this to **1 RTT** by having the client guess the server's preferred key-exchange group and ship its own key share in the very first message, so the server can usually reply with both its key share and encrypted application data in one shot. TLS 1.3 also introduced **0-RTT resumption**, where a returning client can send encrypted application data in its *very first* packet, using a key derived from a previous session — eliminating the handshake round trip entirely for repeat visitors, but at a real cost covered next.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">4</span><h2 class="sec-title">The 0-RTT trap: fast, until it's replayable</h2></div>
+
+0-RTT resumption is attractive precisely because it removes the one round trip TLS 1.3 couldn't otherwise avoid — but the mechanism that makes it fast is the same mechanism that makes it dangerous. Because a 0-RTT request is encrypted using a key derived entirely from information the server already handed the client in a previous session, the server has no way to distinguish a legitimate resumed request from an attacker who captured that exact same encrypted packet off the wire and is replaying it verbatim. Nothing in the 0-RTT data itself proves it was sent "just now" by the original client rather than recorded and resent later.
+
+For a read-only, idempotent request — fetching a public product page, say — a successful replay does nothing an attacker couldn't already do by requesting the page normally, so the risk is negligible. For a state-changing request, it is not: a captured and replayed `POST /transfer-money` executes the transfer again, and the server, seeing a validly-encrypted request, has no built-in signal that anything is wrong.
+
+<Callout label="Careful" variant="warn">
+Never accept 0-RTT data for a request that changes state. Terminate 0-RTT at the edge for idempotent GETs only, and force anything that mutates data (POST, PUT, DELETE, or any GET with side effects) through a full 1-RTT handshake, or explicitly reject early data for those routes at the TLS layer.
+</Callout>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">5</span><h2 class="sec-title">HTTP's evolution: multiplexing, and head-of-line blocking that keeps coming back</h2></div>
+
+HTTP/1.1 sends requests over a connection serially — one request has to fully complete before the next one starts on that same connection. Browsers work around this by opening roughly six parallel TCP connections per origin, trading connection overhead for concurrency.
+
+HTTP/2 solves this properly at the HTTP layer: it **multiplexes** many logical request/response streams over a *single* TCP connection, interleaving their frames so no request has to wait for an unrelated one to finish. The problem is that this multiplexing sits on top of TCP, and TCP itself still enforces strict in-order delivery at the byte-stream level. If a single packet is lost, TCP holds *every* stream's data hostage until that one packet is retransmitted and arrives — even though the lost bytes might belong to only one of a dozen concurrent streams. This is **head-of-line blocking** reappearing one layer up: HTTP/2 fixed application-level head-of-line blocking (one slow request blocking another) but inherited transport-level head-of-line blocking from TCP (one lost packet blocking every stream).
+
+HTTP/3 fixes this by changing the transport underneath: it runs over **QUIC**, which is built on UDP and implements its own per-stream loss recovery, so a lost packet only stalls the one stream it belongs to — every other stream on the same connection keeps flowing. QUIC also supports the 0-RTT resumption from the previous section natively. The adoption data bears out that this isn't a theoretical improvement: as of 2026, roughly a fifth of web traffic runs over HTTP/3, just over half runs HTTP/2, and the remainder is still HTTP/1.x — and in Cloudflare's own production measurements, HTTP/3 showed a time-to-first-byte around 12% faster than HTTP/2 on average, with the largest gains showing up specifically on lossy mobile networks, exactly where TCP's head-of-line blocking hurts most. One operational trap worth naming: an L7 proxy that terminates an inbound HTTP/2 connection and opens a fresh HTTP/1.1 connection to its upstream silently throws away every multiplexing benefit for that hop, even though the client-facing side looks fully modern.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">6</span><h2 class="sec-title">DNS: a distributed cache with a staleness dial</h2></div>
+
+DNS resolution isn't a single lookup — it's a chain of caches. A client's **stub resolver** asks a **recursive resolver** (often run by the ISP or a public service), which — if it doesn't already have a cached answer — walks down from a **root server** to a **TLD server** to the domain's **authoritative server**, caching the answer at every hop along the way for next time. Every layer in that chain is a cache, and every cache entry carries a **TTL (time-to-live)** that controls how long it can be reused before the chain has to be walked again.
+
+TTL is a direct dial between two things a designer wants simultaneously and can't fully have at once: cache efficiency and failover speed. A **short TTL** (30–60 seconds) means clients re-resolve frequently, so if the IP behind a hostname changes, clients pick up the new one within roughly that window — at the cost of more resolution traffic and slightly higher steady-state latency. A **long TTL** (300+ seconds, sometimes hours) means clients rarely re-resolve, which is cheap and fast in steady state, but during a failover — say, a database's primary endpoint moving to a new IP after a crash — clients holding a cached answer will keep sending traffic to the dead IP for up to the full TTL duration, with no way for the server side to push a correction. This is precisely the DNS TTL misconfiguration pitfall that shows up repeatedly in real incident reports: an operator sets a long TTL for the performance win, forgets that the same setting is now the upper bound on failover time, and discovers it during an actual outage rather than before one.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">7</span><h2 class="sec-title">Choosing a real-time transport: long polling, SSE, or WebSockets</h2></div>
+
+Real-time features — live scores, notifications, chat, streaming LLM tokens — all need the server to push data to a client without waiting for the client to ask again, and there are three standard ways to do it, in increasing order of complexity.
+
+**Long polling**: the client makes a normal HTTP request, the server holds it open until it has data (or a timeout), responds, and the client immediately opens a new request. It works through literally every proxy and firewall in existence because it's just HTTP, but every hop between messages pays a fresh HTTP request/response cycle worth of overhead.
+
+**Server-Sent Events (SSE)**: a single long-lived HTTP connection over which the server streams a sequence of text events, one-directionally, server-to-client only. It works over plain HTTP/1.1 (no upgrade handshake needed), and the browser's built-in `EventSource` API reconnects automatically on drop, resuming from the last event using a `Last-Event-ID` header — so resumption logic that the other two options make you build by hand comes for free.
+
+**WebSockets**: a protocol upgrade from HTTP to a full-duplex, binary-capable socket, where either side can send frames at any time with only 2–14 bytes of per-frame overhead. This is the right tool when the client genuinely needs to push data back over the same channel with low latency (collaborative editing, multiplayer games, chat where the client sends as often as it receives) — but it requires **sticky sessions** (the load balancer must route every packet from a given client back to the same backend instance for the life of the connection), which removes the freedom to load-balance that connection's traffic the way a stateless HTTP request enjoys.
+
+The practical default is: reach for **SSE** first. It covers the large majority of real-time use cases — dashboards, notifications, LLM token streaming — because in all of those the data genuinely only flows one way, server to client, and SSE gets you that with none of the sticky-session complexity WebSockets impose. Reserve WebSockets for the specific case where the client must push data back over the same connection, not just occasionally make a normal request alongside it.
+
+Applied to a concrete scale problem: a live sports-score app expecting 10 million concurrent viewers is a textbook SSE case, because viewers never send anything back — they only receive score updates. The design that falls out of the framework: score updates are published once to a Redis pub/sub channel per game, and a fleet of fanout servers each subscribe and stream to their own slice of connected clients over SSE; at roughly 100,000 held-open SSE connections per fanout server (a realistic number for lightweight, mostly-idle long-lived HTTP connections), 10 million viewers needs on the order of 100 fanout servers, each doing nothing but relaying pub/sub messages to its local set of open connections — no sticky-session routing required, and automatic reconnection with `Last-Event-ID` handles the inevitable churn of mobile clients losing and regaining network.
+
+</section>
+
+<WorkTask label="Task 1 · Classify" title="TCP or UDP, and why">
+
+For each scenario, say whether TCP or UDP is the right transport, and justify it in terms of what a lost or reordered packet would actually cost:
+
+(a) A mobile game sending player position updates 20 times per second.
+(b) A client submitting a credit card payment to a checkout API.
+(c) A recursive DNS resolver querying an authoritative server for an A record.
+(d) A video call's audio stream.
+(e) A client pulling a large file from an object store.
+
+<Solution>
+
+**(a) UDP.** A position update is superseded by the next one 50ms later; retransmitting a lost or stale position is worse than just dropping it and using whatever arrives next. This is exactly the game-networking case from Section 2.
+
+**(b) TCP.** A payment request is the textbook case where correctness must beat speed — a dropped or duplicated byte here is a financial bug, not a glitch, so the 1-RTT handshake cost is non-negotiable.
+
+**(c) UDP.** DNS queries are small, and the fallback for a lost query is simply to retry the whole question — cheaper than paying a TCP handshake for every lookup. (DNS does fall back to TCP for oversized responses, but the common case is UDP.)
+
+**(d) UDP.** A dropped audio frame is a barely perceptible gap; waiting for TCP to retransmit it would introduce a stall that's far more disruptive than the original loss — the same tradeoff as video calls in Section 2.
+
+**(e) TCP.** A file transfer needs every byte, in order, exactly once — losing or reordering bytes silently would corrupt the file, so TCP's guarantees are exactly what's needed here, and the one-time handshake cost is negligible against the transfer's total duration.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 2 · Apply" title="DNS TTL and the failover window">
+
+A service's DNS record has a TTL of 600 seconds (10 minutes). At time `T`, the primary database instance behind that hostname crashes, and an automated failover promotes a replica with a new IP address 5 seconds later, updating the DNS record immediately.
+
+(a) In the worst case, how long can a client keep sending traffic to the dead IP after the crash?
+(b) Does lowering the TTL to 30 seconds eliminate the problem? What does it cost in exchange?
+(c) Name one client-side or architectural mitigation that reduces this exposure without touching the TTL at all.
+
+<Solution>
+
+**(a)** Worst case, a client that resolved the hostname *just before* `T` has a cached answer good for the full 600 seconds from that resolution — so it can keep sending traffic to the dead IP for up to 600 seconds after the crash (roughly 595 seconds after the failover completes), regardless of how fast the failover itself was. The failover being fast (5 seconds) doesn't help a client that's still trusting a stale cache entry.
+
+**(b)** Lowering the TTL to 30 seconds shrinks the worst-case exposure window to about 30 seconds — a large improvement — but it does not eliminate the problem, because there's always some window between a cache being populated and the TTL expiring during which a change is invisible to that client. The cost is that every client now re-resolves roughly 20x more often, which means more load on the DNS infrastructure and a small but real increase in the per-request tax described in Section 3, paid continuously rather than just once.
+
+**(c)** A common mitigation is putting a stable **virtual IP (VIP)** or load balancer address in DNS instead of the database's real IP directly — the DNS record then never needs to change during failover at all; only the routing behind that fixed IP changes, which the load balancer or VIP mechanism can update far faster than any DNS TTL could propagate. (Health-checked connection pooling with fast failure detection on the client side is another valid answer.)
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 3 · Design" title="Pick a transport for two features">
+
+A team is building two features for a food-delivery app expecting 2 million concurrent users during peak hours:
+
+1. **Order status updates**: the app shows "Preparing → Out for delivery → Delivered" and moves the courier's dot on a map in near-real-time. The client never sends anything on this channel — it only ever displays updates that originate from the courier's app and the restaurant's system.
+2. **In-app chat between customer and courier**: both sides type and send messages back and forth.
+
+For each feature: pick long polling, SSE, or WebSockets, and justify the choice using the decision framework from Section 6. Then, for feature 1, estimate roughly how many fanout servers are needed if each server can hold 100,000 concurrent connections.
+
+<Solution>
+
+**Feature 1 (order status + map updates): SSE.** Data flows exactly one way — server to client — which is precisely the case Section 6 says SSE covers without any sticky-session cost. The client displaying a courier's position or an order state change never needs to push anything back over the same channel; any customer action (like canceling an order) is a normal, separate HTTP request, not part of this real-time stream.
+
+**Feature 2 (chat): WebSockets.** Both participants send and receive over the same logical channel with low latency expected in both directions — the case Section 6 reserves for WebSockets specifically. Long polling would work but pays a full request/response cycle per message, adding latency that matters for a chat UI; SSE is ruled out because it has no path for the client to push a message back over the same connection, so it would require a second, separate mechanism just for the client-to-server direction, which is more complexity than just using WebSockets in the first place.
+
+**Fanout estimate for Feature 1:** 2,000,000 concurrent connections ÷ 100,000 connections per server ≈ 20 fanout servers, each subscribing to a pub/sub source (per-order or per-region channels) and streaming updates to its slice of connected clients — the same architecture as the 10-million-viewer sports-score example in Section 6, just at roughly a fifth of the scale.
+
+</Solution>
+</WorkTask>
