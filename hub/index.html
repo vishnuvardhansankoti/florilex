@@ -1,6 +1,4 @@
-/** Landing page served at "/" — the one route with no upstream series to proxy to. */
-export function renderHub(): Response {
-  const html = `<!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -28,16 +26,11 @@ export function renderHub(): Response {
 <body>
   <div class="hub">
     <h1>Florilex</h1>
-    <p>One container, several independently-built tutorial series, composed at the edge.</p>
+    <p>Independently-built tutorial series, served together from one Firebase Hosting site.</p>
     <div class="series">
       <a href="/aiml/">AI Engineering from Scratch<small>Math foundations through transformer internals.</small></a>
       <a href="/go/">Go from Scratch<small>The Go language and its runtime, from first principles.</small></a>
     </div>
   </div>
 </body>
-</html>`;
-
-  return new Response(html, {
-    headers: { "content-type": "text/html; charset=utf-8" },
-  });
-}
+</html>

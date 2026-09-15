@@ -1,16 +1,26 @@
-export type SeriesId = "aiml" | "go";
+---
+interface Props {
+  active: "aiml" | "go";
+}
+const { active } = Astro.props;
 
-/**
- * Shared chrome injected into every proxied HTML page so the two
- * independently-built series feel like one site. Deliberately
- * theme-neutral (doesn't reuse either series' accent) since it wraps
- * both — each series still owns everything below the nav.
- */
-export function renderNav(active: SeriesId | null): string {
-  const link = (id: SeriesId, label: string) =>
-    `<a class="florilex-nav-link${active === id ? " florilex-nav-link--active" : ""}" href="/${id}/">${label}</a>`;
+const links = [
+  { id: "aiml", label: "AIML", href: "/aiml/" },
+  { id: "go", label: "Go", href: "/go/" },
+] as const;
+---
+<nav class="florilex-nav">
+  <a class="florilex-nav-brand" href="/">Florilex</a>
+  {links.map((link) => (
+    <a
+      class:list={["florilex-nav-link", { "florilex-nav-link--active": active === link.id }]}
+      href={link.href}
+    >
+      {link.label}
+    </a>
+  ))}
+</nav>
 
-  return `
 <style>
   .florilex-nav {
     display: flex;
@@ -38,9 +48,3 @@ export function renderNav(active: SeriesId | null): string {
   .florilex-nav-link:hover { color: #e7ebed; }
   .florilex-nav-link--active { color: #e7ebed; border-bottom-color: currentColor; }
 </style>
-<nav class="florilex-nav">
-  <a class="florilex-nav-brand" href="/">Florilex</a>
-  ${link("aiml", "AIML")}
-  ${link("go", "Go")}
-</nav>`.trim();
-}

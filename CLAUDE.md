@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Florilex is a microfrontend container for independent tutorial series (AIML, Go, ...), composed at the edge by a single Cloudflare Worker, free tier throughout. It's a pnpm workspace monorepo:
+Florilex is a microfrontend host for independent tutorial series (AIML, Go, ...), built as fully static sites and served together from a single Firebase Hosting site, free tier throughout. It's a pnpm workspace monorepo:
 
 ```
 florilex/
@@ -13,19 +13,24 @@ florilex/
     go/       Astro site, base "/go", same shape, totally separate content
   packages/
     tutorial-kit/   shared components (Callout, Formula, DiagramFigure,
-                     WorkTask, Solution) + the CSS design-token system
-  container/        the Cloudflare Worker that IS the container app
+                     WorkTask, Solution, Nav) + the CSS design-token system
+  hub/              static landing page ("/") linking to each series
+  scripts/          deploy-firebase.sh — build + assemble + firebase deploy
 ```
 
-Each app under `apps/*` builds to fully static HTML/CSS/JS and deploys as its **own** Cloudflare Pages project, getting a free `*.pages.dev` URL — no custom domain, no shared build, no shared blast radius between series.
+Each app under `apps/*` builds to fully static HTML/CSS/JS (`astro build`, `output: "static"`). Because each is built with `base` set to its own mount path (`/aiml`, `/go` in `astro.config.mjs`), every internal link and asset URL it generates is already prefixed with that path. `scripts/deploy-firebase.sh` assembles all of them into one `site/` directory before deploying:
 
-The `container` Worker is the single public entry point. On every request it looks at the first path segment (`/aiml/...` or `/go/...`), proxies the request to that series' Pages origin, and — for HTML responses only — injects one shared nav bar via `HTMLRewriter` so the independently deployed sites feel like one app (`container/src/index.ts`, `nav.ts`). Non-HTML responses (JS, CSS, images) pass straight through untouched. `/` with no series prefix serves a small hub page (`container/src/hub.ts`) linking to each series.
+```
+site/index.html   <- hub/index.html          (served at /)
+site/aiml/...     <- apps/aiml/dist          (served at /aiml/...)
+site/go/...       <- apps/go/dist            (served at /go/...)
+```
 
-Because each Astro app is built with `base` set to its own mount path (`/aiml`, `/go` in `astro.config.mjs`), every internal link and asset URL it generates is already correctly prefixed — the Worker never rewrites HTML content or asset paths, only prepends the nav.
+Since `base` already makes every generated link/asset path-correct, no runtime rewriting or proxying is needed — the whole thing is one static Firebase Hosting deployment. The shared nav bar (linking between series) is a `Nav.astro` component from `@florilex/tutorial-kit`, rendered at build time into each app's layout/index pages — not injected at request time.
 
 ## Commands
 
-There is no test suite, linter, or formatter configured in this repo (no root tsconfig, no ESLint/Prettier config). TypeScript type-checking happens implicitly through `astro build` / `astro dev` and `wrangler`.
+There is no test suite, linter, or formatter configured in this repo (no root tsconfig, no ESLint/Prettier config). TypeScript type-checking happens implicitly through `astro build` / `astro dev`.
 
 ```bash
 pnpm install
@@ -33,22 +38,17 @@ pnpm install
 # Local dev (each on its own Astro dev server)
 pnpm dev:aiml       # http://localhost:4321/aiml/...
 pnpm dev:go         # http://localhost:4321/go/...  (different port if run together)
-pnpm dev:container  # wrangler dev — proxies to whatever AIML_ORIGIN/GO_ORIGIN point at
 
 # Build
 pnpm build:aiml
 pnpm build:go
 pnpm build           # builds all apps/* in the workspace
 
-# Deploy (all free tier)
-pnpm deploy:aiml       # wrangler pages deploy dist --project-name=aiml-tutorials
-pnpm deploy:go         # wrangler pages deploy dist --project-name=go-tutorials
-pnpm deploy:container  # wrangler deploy
+# Deploy (free tier — Firebase Hosting Spark plan)
+pnpm deploy          # scripts/deploy-firebase.sh: build, assemble site/, firebase deploy
 ```
 
-For the container Worker to do anything useful locally, point `AIML_ORIGIN` / `GO_ORIGIN` in `container/wrangler.toml` at your local `astro dev` ports (or at already-deployed Pages URLs) before running `pnpm dev:container`.
-
-Deploying an app requires a Cloudflare Pages project already connected to this repo with the matching root directory (`apps/aiml` or `apps/go`), build command `pnpm build`, output `dist`. After creating those, update `container/wrangler.toml`'s `AIML_ORIGIN`/`GO_ORIGIN` to the real `.pages.dev` URLs before deploying the container.
+Deploying requires a Firebase project (Spark/free plan is sufficient — this is a static site, no Cloud Functions involved) with Hosting enabled. Set the project id in `.firebaserc` (`projects.default`), and update the `site` URL in both apps' `astro.config.mjs` to the real Firebase Hosting URL (`https://<project-id>.web.app`) once created. `scripts/deploy-firebase.sh` also honors a `FIREBASE_PROJECT_ID` env var if you want to override the `.firebaserc` default (used by CI). Firebase CLI auth: `firebase login` locally, or a service account JSON via `GOOGLE_APPLICATION_CREDENTIALS` in CI (see `.github/workflows/deploy-firebase.yml`).
 
 ## Content architecture (apps/aiml, apps/go)
 
@@ -58,13 +58,13 @@ Each series app is an Astro content-collection site:
 - `src/content/lessons/phases/<NN-phase-name>/<NN-lesson-name>.mdx` — one MDX file per lesson, frontmatter matching the schema above, body built from `@florilex/tutorial-kit` components.
 - `src/pages/phases/[...slug].astro` — the single dynamic route; `getStaticPaths()` maps every entry in the `lessons` collection to a static page at build time.
 - `src/pages/index.astro` — series landing page; groups lessons by `phase` for a table of contents.
-- `src/layouts/LessonLayout.astro` — per-lesson chrome (title, phase/lesson eyebrow, optional "hook" pull-quote, footer attribution via `sourceUrl`). Imports `@florilex/tutorial-kit/tokens.css` and the app's own `src/styles/theme.css` (per-series accent override).
+- `src/layouts/LessonLayout.astro` — per-lesson chrome (shared cross-series `Nav`, title, phase/lesson eyebrow, optional "hook" pull-quote, footer attribution via `sourceUrl`). Imports `@florilex/tutorial-kit/tokens.css` and the app's own `src/styles/theme.css` (per-series accent override).
 - `src/styles/theme.css` — per-app visual identity layered on top of the shared token system.
 
 `@florilex/tutorial-kit` (packages/tutorial-kit) is the shared dependency both apps consume via `workspace:*`:
 
 - `src/tokens.css` — the shared CSS design-token system both apps' `theme.css` build on.
-- `src/components/*.astro` — `Callout`, `Formula`, `DiagramFigure`, `WorkTask`, `Solution`, consumed by MDX lesson content as `@florilex/tutorial-kit/components/<Name>.astro`.
+- `src/components/*.astro` — `Callout`, `Formula`, `DiagramFigure`, `WorkTask`, `Solution` (consumed by MDX lesson content as `@florilex/tutorial-kit/components/<Name>.astro`), and `Nav` (the cross-series nav bar, rendered directly into each app's layout/index pages with an `active` prop).
 - `src/stripTags.ts` — strips inline HTML from frontmatter titles (which may carry markup like `<em>` for on-page accenting) for contexts that need plain text (`<title>`, nav links, list labels).
 
 Frontmatter fields like `title` and `subtitle` intentionally carry raw inline HTML and are rendered with `set:html` in layouts — always run them through `stripTags` first for any plain-text context.
@@ -73,7 +73,7 @@ Frontmatter fields like `title` and `subtitle` intentionally carry raw inline HT
 
 1. Copy `apps/go` to `apps/<series>`, change `base` in its `astro.config.mjs`.
 2. Give it its own `theme.css` accent override if it wants distinct branding.
-3. Add a new Cloudflare Pages project pointed at `apps/<series>`.
-4. Add the series to `SERIES`/`ORIGIN_FOR` in `container/src/index.ts`, its origin var in `container/wrangler.toml`, and a link in `container/src/hub.ts`.
+3. Add a link to it in `hub/index.html`, and a link/id to `Nav.astro` in `packages/tutorial-kit/src/components/Nav.astro`.
+4. Add `site/aiml/...` -> `site/<series>/...` copy step to `scripts/deploy-firebase.sh`.
 
-No existing series is touched by any of this — each app's build, content, and deploy are fully independent.
+No existing series is touched by any of this — each app's build and content are fully independent; they're only combined at the final "assemble `site/`" deploy step.

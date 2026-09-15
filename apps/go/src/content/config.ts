@@ -10,6 +10,7 @@ const lessons = defineCollection({
     phaseTitle: z.string(),
     order: z.number(),
     lessonNumber: z.number(),
+    pubDate: z.coerce.date(),
     hook: z.string().optional(),
     hookCredit: z.string().optional(),
     sourceUrl: z.string().url().optional(),

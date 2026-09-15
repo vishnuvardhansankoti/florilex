@@ -3,7 +3,9 @@ import { getCollection } from "astro:content";
 import { stripTags } from "@florilex/tutorial-kit/stripTags";
 
 export async function GET(context) {
-  const lessons = (await getCollection("lessons")).sort((a, b) => a.data.order - b.data.order);
+  const lessons = (await getCollection("lessons"))
+    .sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf())
+    .slice(0, 2);
 
   return rss({
     title: "AI Engineering from Scratch",
@@ -13,6 +15,7 @@ export async function GET(context) {
       title: stripTags(lesson.data.title),
       description: lesson.data.summary,
       link: `/aiml/phases/${lesson.slug.replace(/^phases\//, "")}`,
+      pubDate: lesson.data.pubDate,
       categories: [lesson.data.phaseTitle],
     })),
   });

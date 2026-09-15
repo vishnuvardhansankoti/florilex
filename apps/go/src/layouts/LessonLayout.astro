@@ -2,6 +2,7 @@
 import "@florilex/tutorial-kit/tokens.css";
 import "../styles/theme.css";
 import { stripTags } from "@florilex/tutorial-kit/stripTags";
+import Nav from "@florilex/tutorial-kit/components/Nav.astro";
 import Sidebar from "../components/Sidebar.astro";
 import SidebarInit from "../components/SidebarInit.astro";
 
@@ -31,6 +32,7 @@ const lessonLabel = String(frontmatter.lessonNumber).padStart(2, "0");
     <SidebarInit />
   </head>
   <body>
+    <Nav active="go" />
     <div class="shell">
       <Sidebar currentPath={Astro.url.pathname} />
       <div class="page lesson-page">

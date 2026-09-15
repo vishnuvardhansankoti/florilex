@@ -2,17 +2,17 @@
   "name": "florilex",
   "private": true,
   "version": "0.1.0",
-  "description": "Microfrontend container for the tutorial series (AIML, Go, ...), composed at the edge by a Cloudflare Worker.",
+  "description": "Microfrontend container for the tutorial series (AIML, Go, ...), served from one Firebase Hosting site.",
   "scripts": {
     "dev:aiml": "pnpm --filter @florilex/aiml dev",
     "dev:go": "pnpm --filter @florilex/go dev",
-    "dev:container": "pnpm --filter @florilex/container dev",
     "build:aiml": "pnpm --filter @florilex/aiml build",
     "build:go": "pnpm --filter @florilex/go build",
     "build": "pnpm -r --filter=./apps/* build",
-    "deploy:aiml": "pnpm --filter @florilex/aiml exec wrangler pages deploy dist --project-name=aiml-tutorials",
-    "deploy:go": "pnpm --filter @florilex/go exec wrangler pages deploy dist --project-name=go-tutorials",
-    "deploy:container": "pnpm --filter @florilex/container deploy"
+    "deploy": "bash scripts/deploy-firebase.sh"
+  },
+  "devDependencies": {
+    "firebase-tools": "^13.23.0"
   },
   "engines": {
     "node": ">=18"

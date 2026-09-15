@@ -1,7 +1,8 @@
 node_modules/
 dist/
 .astro/
-.wrangler/
+site/
+.firebase/
 .env
 .DS_Store
 *.log

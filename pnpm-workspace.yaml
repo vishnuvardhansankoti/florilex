@@ -1,9 +1,9 @@
 packages:
   - "apps/*"
   - "packages/*"
-  - "container"
 
 allowBuilds:
   esbuild: true
+  protobufjs: true
+  re2: true
   sharp: false
-  workerd: true

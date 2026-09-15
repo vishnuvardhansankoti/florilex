@@ -3,6 +3,7 @@ import { getCollection } from "astro:content";
 import "@florilex/tutorial-kit/tokens.css";
 import "../styles/theme.css";
 import { stripTags } from "@florilex/tutorial-kit/stripTags";
+import Nav from "@florilex/tutorial-kit/components/Nav.astro";
 import Sidebar from "../components/Sidebar.astro";
 import SidebarInit from "../components/SidebarInit.astro";
 
@@ -24,6 +25,7 @@ for (const lesson of lessons) {
     <SidebarInit />
   </head>
   <body>
+    <Nav active="aiml" />
     <div class="shell">
       <Sidebar currentPath={Astro.url.pathname} />
       <div class="page">
