@@ -1,0 +1,159 @@
+---
+title: 'Recursion: <em>The Leap of Faith</em>'
+subtitle: You don't trace every call to trust a recursive function — you trust the
+  smaller call and write down what happens next.
+summary: 'This lesson replaces the instinct to mentally trace every recursive call
+  with a more durable mental model: define a base case that needs no help, assume
+  the recursive call already solves the smaller version of the problem correctly,
+  and write only the work needed to turn that smaller answer into the current answer.
+  It walks through the call stack as the literal machinery behind that trust, shows
+  where the model breaks (missing base cases, no progress toward one, silent recomputation
+  of the same subproblem), and contrasts tracing recursion for debugging against trusting
+  it for design.'
+phase: 00-foundations
+phaseTitle: Phase 00 — Foundations
+order: 2
+lessonNumber: 2
+pubDate: '2026-09-15'
+hook: You don't need to know how the recursive call works. You need to know that it
+  works.
+hookCredit: — the recursive leap of faith
+sourceUrl: https://dsa.handbook.academy/curriculum/foundations/recursion-mental-model/
+---
+
+import Callout from "@florilex/tutorial-kit/components/Callout.astro";
+import Formula from "@florilex/tutorial-kit/components/Formula.astro";
+import WorkTask from "@florilex/tutorial-kit/components/WorkTask.astro";
+import Solution from "@florilex/tutorial-kit/components/Solution.astro";
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">1</span><h2 class="sec-title">Why recursion feels backwards at first</h2></div>
+
+A loop is easy to picture: state sits in a few variables, and each iteration mutates them a little until a condition flips. A recursive function looks like it's cheating — it calls itself before it has an answer, as if a function could ask a not-yet-finished copy of itself for help and get one back. The instinct this creates is to trace: pick a small input, write down every call in the order it happens, follow the arrows all the way to the bottom of the recursion and all the way back up, and only then believe the function works.
+
+Tracing is a fine way to *check* a specific recursive function on a specific input. It is a terrible way to *write* one, because the number of calls to hold in your head explodes exactly as fast as the problem does. A function that recurses ten levels deep, branching twice at each level, produces over a thousand calls — nobody designs correct code by mentally simulating a thousand function calls. The functions that recurse well are designed with a different, much smaller unit of thought: one call, considered in isolation, plus a promise about what every other call does.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">2</span><h2 class="sec-title">The leap of faith: trust the call, don't trace it</h2></div>
+
+Every correct recursive function is built from exactly two pieces: a **base case**, small enough to answer directly with no further calls, and a **recursive case**, which calls the function again on a *strictly smaller* version of the same problem and combines that answer into its own.
+
+The leap of faith is this: when you reach the line that makes the recursive call, stop thinking about how that call will execute. Assume — by an inductive argument you don't have to re-derive every time — that it already returns the correct answer for its smaller input. Your only job at that line is to say what you'd do with a correct answer to the smaller problem, if someone handed it to you for free.
+
+Take summing a list. `sum([7, 2, 9, 4])` should hand back `22`. The base case is the easiest list to sum: the empty list sums to `0`, no computation needed. For anything else, the leap of faith says: assume `sum(rest_of_list)` already correctly sums everything after the first element. Then the whole answer is just `first_element + sum(rest_of_list)`. You never had to think about what happens three calls deep — you only had to trust one call and describe the one step of work your own call is responsible for.
+
+```python
+def total(items):
+    if not items:            # base case: nothing to add
+        return 0
+    return items[0] + total(items[1:])   # trust total() on the rest
+```
+
+<Callout label="Takeaway">
+At the line that recurses, stop simulating and start trusting. Your only job is the one step of work: what do you do with a correct answer to the smaller problem, once you have it?
+</Callout>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">3</span><h2 class="sec-title">What the leap of faith is actually resting on</h2></div>
+
+The leap of faith isn't blind trust — it's mathematical induction, and induction only holds if two conditions are both true. First, the base case must be correct and reachable directly, with no recursive call involved. Second, every recursive call must move *strictly closer* to a base case — the input has to shrink by some measurable amount (a shorter list, a smaller number, fewer remaining choices) on every single call, with no way to stall or grow.
+
+<Formula name="Recursion as induction">
+If P(base case) holds, and P(k) => P(next larger input) for every non-base input k, then P(n) holds for every reachable n.
+</Formula>
+
+If both hold, then the base case is correct by direct inspection, which makes the smallest non-base input correct (its recursive call reaches only a base case), which makes the next input correct (its call reaches something already shown correct), and so on for every input the function will ever see. That chain is exactly why you're allowed to stop tracing after checking one level: the base case anchors it, and the shrinking step propagates correctness upward automatically.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">4</span><h2 class="sec-title">The call stack: where the trust becomes real</h2></div>
+
+The leap of faith describes how to *think* about a recursive function. Underneath, the machine has no faith at all — it runs a perfectly literal, mechanical process using a **call stack**. Every time a function calls another (including calling itself), the runtime pushes a new **stack frame** holding that call's local variables, its parameters, and the exact instruction to resume at once the call returns. The calling frame doesn't disappear; it's paused underneath, waiting.
+
+For `total([7, 2, 9, 4])`, the stack grows one frame per call — `total([7,2,9,4])` waiting on `total([2,9,4])` waiting on `total([9,4])` waiting on `total([4])` waiting on `total([])` — until `total([])` hits the base case and returns `0` without pushing anything new. Then the stack unwinds in exact reverse order: `total([4])` receives `0`, computes `4 + 0 = 4`, returns it, and is popped; `total([9,4])` receives `4`, computes `9 + 4 = 13`, and so on, back up to `22`. The leap of faith and the call stack describe the same event from two directions — the leap of faith is the promise you rely on while writing the code, the stack is the literal bookkeeping that makes the promise true at runtime.
+
+That bookkeeping isn't free. Each frame consumes real memory, and most language runtimes cap how many frames can stack up (a few thousand to tens of thousands is typical) before raising a stack overflow. A recursive function whose depth scales with input size — like `total` on a list of a million elements — can hit that ceiling even though the logic is correct, which is one reason iterative rewrites matter for deep, unbounded recursion, not just recursion that's actually broken.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">5</span><h2 class="sec-title">Where the leap of faith breaks</h2></div>
+
+Every recursion bug traces back to one of the two conditions from Section 3 failing.
+
+**No base case, or an unreachable one.** Delete the `if not items` check from `total` and every call recurses forever — or rather, until the stack overflows, since `items[1:]` eventually becomes `[]` and `[][0]` throws before any base case gets a chance to catch it.
+
+**No progress toward the base case.** A function that calls itself with the *same* input, or one that doesn't reliably shrink (say, `n - 1` guarded by a condition that can be skipped), recurses without ever approaching a stopping point. This is subtler than a missing base case, because the base case exists and is written correctly — it's simply never reached from certain inputs.
+
+**Silent recomputation.** Naive Fibonacci is the classic example: `fib(n) = fib(n-1) + fib(n-2)` is a textbook-perfect leap of faith — base case at `fib(0)` and `fib(1)`, every call strictly shrinks. It is also exponentially slow, because `fib(n-2)` gets recomputed from scratch inside both `fib(n-1)` and the outer call, and that duplication compounds at every level. The leap of faith guarantees *correctness*, not *efficiency* — a correct recursive definition can still do catastrophically repeated work, which is precisely the gap that memoization and dynamic programming exist to close by caching each subproblem's answer the first time it's computed.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">6</span><h2 class="sec-title">Trace to debug, trust to design</h2></div>
+
+The two mental modes aren't in competition — they answer different questions. When you're *writing* a new recursive function, trust it: name the base case, state what the recursive call gives you for free, and write the one step of work that turns that into your own answer. Tracing every call while designing is how you end up unable to write anything past two levels of depth.
+
+When you're *debugging* a recursive function that's already misbehaving, tracing is exactly the right tool — pick the smallest failing input, and walk the actual stack, frame by frame, until you find the call whose behavior doesn't match what you assumed it would. That's also the fastest way to locate which of the two induction conditions broke: either the trace never bottoms out at a base case, or it bottoms out but the base case's answer is wrong, or the base case is fine but the combining step at some level does the wrong thing with an otherwise-correct smaller answer. Knowing which mode to be in — trust while designing, trace while debugging — is most of what separates programmers who find recursion natural from those who still find it mysterious after years of writing it.
+
+</section>
+
+<WorkTask label="Task 1 · Trace" title="Find the broken induction step">
+
+Both functions below are meant to compute the length of a singly linked list (each node has a `.value` and a `.next`, and the list ends when `.next` is `None`). One of them is correct. The other passes for short lists but fails for longer ones. For the broken one: which of the two induction conditions from Section 3 does it violate, and on what kind of input does it first go wrong?
+
+```python
+# Version A
+def length_a(node):
+    if node is None:
+        return 0
+    return 1 + length_a(node.next)
+
+# Version B
+def length_b(node):
+    if node is None:
+        return 0
+    if node.next is None:
+        return 1
+    return 1 + length_b(node)
+```
+
+<Solution>
+
+**Version A is correct.** Base case: an empty list (`node is None`) has length `0`, checked with no recursive call. Recursive case: trust `length_a(node.next)` to correctly count everything after the current node, then add `1` for the current node. Every call strictly shrinks the list by exactly one node (`node.next` always has one fewer node reachable than `node`), so the base case is guaranteed to be reached.
+
+**Version B is broken** on the *progress* condition, not the base case. Its base cases (`None` and single-node lists) are both correct in isolation. But its recursive case calls `length_b(node)` — the **same** node it was just given, not `node.next`. For any list with three or more nodes, the recursion never shrinks: it calls itself on the identical unchanged argument forever, so it never reaches either base case and instead recurses until the call stack overflows. It first breaks on any list with 3+ nodes; a 1- or 2-node list happens to hit a base case immediately and looks fine, which is exactly what makes this class of bug easy to miss in casual testing.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 2 · Design" title="Write is_palindrome using the leap of faith">
+
+Write a recursive function `is_palindrome(s)` that returns `True` if the string `s` reads the same forwards and backwards, `False` otherwise. Don't trace it mentally to convince yourself it works — instead, explicitly state: (a) the base case(s), (b) what you're assuming the recursive call already gives you for free, and (c) the one step of work your own call adds. Then say what the maximum recursion depth is for a string of length `n`, and why that matters for very long strings.
+
+<Solution>
+
+```python
+def is_palindrome(s):
+    if len(s) <= 1:                          # base case
+        return True
+    if s[0] != s[-1]:
+        return False
+    return is_palindrome(s[1:-1])             # trust the leap
+```
+
+**(a) Base case:** a string of length 0 or 1 is trivially a palindrome — there's nothing on either side to disagree.
+
+**(b) What the recursive call gives for free:** `is_palindrome(s[1:-1])` is assumed to correctly answer whether the string with the first and last characters stripped off is a palindrome.
+
+**(c) The one step of work added:** compare `s[0]` and `s[-1]`. If they differ, the whole string can't be a palindrome regardless of what the trusted call would say, so return `False` immediately without even making the call. If they match, the whole string is a palindrome exactly when the trusted inner answer is — so return that answer directly.
+
+**Recursion depth:** each call strips two characters, so the depth is `n // 2` for a string of length `n`. That's linear in the input size, which means a sufficiently long string (roughly the tens-of-thousands-of-characters range, depending on the runtime's default stack limit) can overflow the stack even though the logic is completely correct — an example of the depth ceiling from Section 4, and a case where an iterative two-pointer version (`lo`/`hi` indices walking inward) would be the safer choice for unbounded input sizes.
+
+</Solution>
+</WorkTask>
