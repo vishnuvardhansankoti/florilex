@@ -12,6 +12,15 @@ const links = [
 ] as const;
 ---
 <nav class="florilex-nav">
+  <button
+    id="sidebar-toggle"
+    class="sidebar-toggle"
+    type="button"
+    aria-label="Toggle sidebar"
+    aria-controls="sidebar"
+  >
+    <span class="sidebar-toggle-arrow" aria-hidden="true">&lsaquo;</span>
+  </button>
   <a class="florilex-nav-brand" href="/">Florilex</a>
   {links.map((link) => (
     <a
@@ -52,4 +61,26 @@ const links = [
   }
   .florilex-nav-link:hover { color: #e7ebed; }
   .florilex-nav-link--active { color: #e7ebed; border-bottom-color: currentColor; }
+
+  .sidebar-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.8rem;
+    height: 1.8rem;
+    padding: 0;
+    border-radius: 6px;
+    border: 1px solid #2a3237;
+    background: transparent;
+    color: #a7b1b7;
+    cursor: pointer;
+  }
+  .sidebar-toggle:hover { color: #e7ebed; border-color: #3a444a; }
+  .sidebar-toggle-arrow {
+    display: block;
+    font-size: 1.1rem;
+    line-height: 1;
+    transition: transform 0.2s ease;
+  }
+  html[data-sidebar="closed"] .sidebar-toggle-arrow { transform: rotate(180deg); }
 </style>
