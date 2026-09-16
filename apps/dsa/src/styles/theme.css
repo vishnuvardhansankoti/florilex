@@ -94,13 +94,12 @@ html[data-sidebar="closed"] .sidebar-inner { padding-left: 0; padding-right: 0; 
 
 .sidebar-toggle {
   position: fixed;
-  top: 1.1rem;
+  top: 4.25rem;
   left: calc(280px + 1.1rem);
   z-index: 40;
   display: flex;
-  flex-direction: column;
+  align-items: center;
   justify-content: center;
-  gap: 4px;
   width: 2.2rem;
   height: 2.2rem;
   padding: 0;
@@ -110,8 +109,15 @@ html[data-sidebar="closed"] .sidebar-inner { padding-left: 0; padding-right: 0; 
   cursor: pointer;
   transition: left 0.2s ease;
 }
-.sidebar-toggle-bar { display: block; height: 2px; margin: 0 0.5rem; background: var(--ink-soft); border-radius: 1px; }
+.sidebar-toggle-arrow {
+  display: block;
+  font-size: 1.1rem;
+  line-height: 1;
+  color: var(--ink-soft);
+  transition: transform 0.2s ease;
+}
 html[data-sidebar="closed"] .sidebar-toggle { left: 1.1rem; }
+html[data-sidebar="closed"] .sidebar-toggle-arrow { transform: rotate(180deg); }
 
 .sidebar-backdrop { display: none; }
 
