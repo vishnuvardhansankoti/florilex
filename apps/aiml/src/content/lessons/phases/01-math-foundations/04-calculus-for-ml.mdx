@@ -1,0 +1,306 @@
+---
+title: 'Calculus for ML: <em>Which Way Is Downhill</em>'
+subtitle: A derivative is nothing more than a compass — it points the direction that
+  makes a loss function smaller, and gradient descent is just following it, step after
+  step.
+summary: 'This lesson builds the calculus a neural network actually runs on: what
+  a derivative measures and the two ways to compute one (numerical finite differences
+  vs. analytical rules), the derivatives of sigmoid and cross-entropy that show up
+  in almost every model, gradient descent in 1D and then in 2D via the gradient vector,
+  and the full derivation of linear regression''s gradient down to a manual weight
+  update. It closes with the Hessian matrix and a first-order Taylor approximation,
+  connecting curvature to why some loss surfaces are easy to descend and others aren''t.'
+phase: 01-math-foundations
+phaseTitle: Phase 01 — Math Foundations
+order: 4
+lessonNumber: 4
+pubDate: '2026-09-17'
+hook: Derivatives tell you which way is downhill. That is all a neural network needs
+  to learn.
+hookCredit: — training, reduced to its one essential question
+sourceUrl: https://aiengineeringfromscratch.com/lesson?path=phases%2F01-math-foundations%2F04-calculus-for-ml
+---
+
+import Callout from "@florilex/tutorial-kit/components/Callout.astro";
+import Formula from "@florilex/tutorial-kit/components/Formula.astro";
+import WorkTask from "@florilex/tutorial-kit/components/WorkTask.astro";
+import Solution from "@florilex/tutorial-kit/components/Solution.astro";
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">1</span><h2 class="sec-title">A derivative is a rate of change, computed two ways</h2></div>
+
+For a function `y = f(x)`, the derivative `f'(x)` answers one question: if `x` moves a tiny amount, how much does `y` move, and in which direction? Geometrically, `f'(x)` is the slope of the line tangent to `f` at `x` — not the average slope between two far-apart points, but the slope `f` is instantaneously following right at `x`.
+
+Take `f(x) = x²`. At `x = 2`, `f'(x) = 2x = 4`: nudge `x` slightly to the right and `y` grows about 4 times as fast. At `x = 0`, `f'(x) = 0`: `f` is momentarily flat — a nudge in either direction barely changes `y` at all, which is exactly the signature of sitting at a minimum.
+
+There are two ways to get `f'(x)` in code, and knowing both matters for later lessons (autodiff builds directly on this distinction):
+
+```python
+def numerical_derivative(f, x, h=1e-5):
+    return (f(x + h) - f(x - h)) / (2 * h)   # central finite difference
+
+def analytical_derivative_x_squared(x):
+    return 2 * x   # the power rule, applied by hand: d/dx[x^n] = n*x^(n-1)
+```
+
+**Numerical differentiation** approximates the slope by actually evaluating `f` at two nearby points and dividing the change — general-purpose, works on any `f` you can call as a black box, but introduces floating-point error and costs at least one extra function evaluation per derivative. **Analytical differentiation** applies algebraic rules (power rule, product rule, and the rules for `sin`, `exp`, `log`, etc.) to get an exact closed-form expression once, ahead of time — exact and cheap to evaluate, but requires knowing `f`'s formula rather than just being able to call it.
+
+<Callout label="Takeaway">
+Numerical differentiation is the right tool for checking that an analytical derivative was derived correctly — compute both at a few points and confirm they agree to a few decimal places. It's a debugging tool, not how production training code computes gradients (that's what the next lesson's chain rule and automatic differentiation are for).
+</Callout>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">2</span><h2 class="sec-title">Two derivatives every ML model leans on: sigmoid and cross-entropy</h2></div>
+
+Two functions show up so often in ML that their derivatives are worth deriving once and keeping on hand.
+
+**Sigmoid**, `σ(x) = 1 / (1 + e^(-x))`, squashes any real number into `(0, 1)`, which is why it shows up as an activation function and as the standard way to turn a raw score into a probability. Differentiating it (via the quotient rule) simplifies to a strikingly compact form:
+
+<Formula name="Sigmoid derivative">
+σ'(x) = σ(x) · (1 − σ(x))
+</Formula>
+
+The derivative is written entirely in terms of the function's *own output* — if you've already computed `σ(x)` on the forward pass, the derivative costs one multiplication and one subtraction, no re-evaluation of the exponential needed. It's also informative on its own: `σ(x)(1 - σ(x))` is largest (`0.25`) when `σ(x) = 0.5` (maximum uncertainty, steepest part of the curve) and shrinks toward `0` as `σ(x)` approaches either `0` or `1` — the flat tails of the sigmoid curve, where a nudge to `x` barely moves the output at all.
+
+**Binary cross-entropy loss**, `L = -[y·log(ŷ) + (1-y)·log(1-ŷ)]` for a true label `y ∈ {0, 1}` and a predicted probability `ŷ`, measures how far a predicted probability is from the true label. Its derivative with respect to the prediction is:
+
+<Formula name="Cross-entropy derivative">
+∂L/∂ŷ = −(y/ŷ) + (1−y)/(1−ŷ)
+</Formula>
+
+This blows up (goes to infinity) as `ŷ` approaches the *wrong* extreme — a confidently wrong prediction (`ŷ` near `0` when `y = 1`, or vice versa) produces an enormous gradient, which is precisely the design intent: cross-entropy is meant to punish confident mistakes far more sharply than a squared-error loss would. When `∂L/∂ŷ` is combined with `σ'(x)` from the sigmoid feeding into it — the next lesson's chain rule — the two blowups partially cancel into one clean, numerically well-behaved expression, which is the actual reason sigmoid and cross-entropy are almost always used as a matched pair rather than independently.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">3</span><h2 class="sec-title">Gradient descent in one dimension</h2></div>
+
+A derivative doesn't just tell you the slope — its *sign* tells you which way is uphill. If `f'(x) > 0`, `f` increases as `x` increases, so decreasing `x` decreases `f`. If `f'(x) < 0`, the opposite. Either way, moving *against* the sign of the derivative moves toward a smaller value of `f`. That single observation is the entire idea behind gradient descent.
+
+<Formula name="Gradient descent update, 1D">
+x ← x − α · f'(x)
+</Formula>
+
+`α` (the **learning rate**) controls how big a step to take. Repeat the update enough times and, for a well-behaved `f`, `x` converges toward a point where `f'(x) ≈ 0` — a local minimum, the flat point from Section 1.
+
+```python
+def gradient_descent_1d(f_prime, x0, lr=0.1, steps=50):
+    x = x0
+    for _ in range(steps):
+        x = x - lr * f_prime(x)
+    return x
+
+# minimize f(x) = x^2, whose derivative is f'(x) = 2x
+x_min = gradient_descent_1d(lambda x: 2 * x, x0=10.0, lr=0.1, steps=50)
+# converges toward 0.0, the true minimum of x^2
+```
+
+The learning rate is the whole game: too small, and convergence is correct but wastes hundreds of steps closing a gap it could've closed in ten; too large, and each step overshoots the minimum, and for `f(x) = x²` specifically, an update with `α > 1` doesn't just overshoot — it moves `x` *further* from `0` than it started (since the new `x` is `x(1 - 2α)`, whose magnitude exceeds `|x|` once `α > 1`), diverging instead of converging. Picking `α` is a tradeoff this lesson names but doesn't fully resolve — later lessons on optimizers (momentum, Adam) exist specifically because a single fixed learning rate is a blunt instrument.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">4</span><h2 class="sec-title">From one dimension to many: the gradient vector</h2></div>
+
+A real loss function doesn't depend on one number — it depends on every weight in the model at once. For `f(x, y)`, the natural generalization of "the derivative" is the **partial derivative** with respect to each variable separately: `∂f/∂x` treats `y` as a constant and asks how `f` changes as `x` alone moves; `∂f/∂y` does the mirror version. Stacking both partials into a vector gives the **gradient**, written `∇f`:
+
+<Formula name="Gradient vector">
+∇f(x, y) = [∂f/∂x, ∂f/∂y]
+</Formula>
+
+The gradient generalizes the 1D sign rule exactly: `∇f` points in the direction of *steepest increase* at that point, so `-∇f` points in the direction of steepest decrease — the single best direction to step in if the goal is to shrink `f` as fast as possible, out of every direction available in the full-dimensional space, not just "left or right" as in Section 3.
+
+```python
+def gradient_2d(f_partial_x, f_partial_y, x, y):
+    return [f_partial_x(x, y), f_partial_y(x, y)]
+
+def gradient_descent_2d(grad_fn, x0, y0, lr=0.1, steps=50):
+    x, y = x0, y0
+    for _ in range(steps):
+        gx, gy = grad_fn(x, y)
+        x, y = x - lr * gx, y - lr * gy
+    return x, y
+
+# minimize f(x, y) = x^2 + y^2, whose partials are 2x and 2y
+x_min, y_min = gradient_descent_2d(
+    lambda x, y: (2 * x, 2 * y), x0=5.0, y0=-3.0, lr=0.1, steps=50
+)
+# converges toward (0.0, 0.0)
+```
+
+Nothing about the update rule changed — `x ← x - α·∂f/∂x` and `y ← y - α·∂f/∂y`, applied simultaneously — it's the same downhill step from Section 3, just taken once per dimension, and this pattern extends unchanged to a million-weight neural network: one partial derivative per weight, all million computed and applied together every step.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">5</span><h2 class="sec-title">Worked derivation: the gradient of linear regression</h2></div>
+
+Linear regression predicts `ŷ = w·x + b` for a weight `w`, a bias `b`, and an input `x`, and is trained by minimizing mean squared error over `n` training examples:
+
+<Formula name="MSE loss for linear regression">
+L(w, b) = (1/n) · Σᵢ (w·xᵢ + b − yᵢ)²
+</Formula>
+
+Differentiating with respect to `w` (treating each `(w·xᵢ + b − yᵢ)²` term with the power rule and the inner linear term's own derivative, `∂/∂w[w·xᵢ + b − yᵢ] = xᵢ`) gives:
+
+<Formula name="Linear regression gradients">
+∂L/∂w = (2/n) · Σᵢ (w·xᵢ + b − yᵢ)·xᵢ,   ∂L/∂b = (2/n) · Σᵢ (w·xᵢ + b − yᵢ)
+</Formula>
+
+Both gradients share the same core quantity, the **residual** `(w·xᵢ + b − yᵢ)` — how wrong the current prediction is for example `i`. `∂L/∂w` weights each residual by its own `xᵢ` before averaging (a big residual on a large-magnitude input moves `w` more); `∂L/∂b` just averages the raw residuals, since `b` shifts every prediction equally regardless of `x`.
+
+```python
+def mse_gradients(w, b, xs, ys):
+    n = len(xs)
+    residuals = [(w * x + b) - y for x, y in zip(xs, ys)]
+    dw = (2 / n) * sum(r * x for r, x in zip(residuals, xs))
+    db = (2 / n) * sum(residuals)
+    return dw, db
+
+def train_linear_regression(xs, ys, lr=0.01, epochs=200):
+    w, b = 0.0, 0.0
+    for _ in range(epochs):
+        dw, db = mse_gradients(w, b, xs, ys)
+        w, b = w - lr * dw, b - lr * db
+    return w, b
+```
+
+This is the exact same 2D gradient descent from Section 4, applied to real data instead of an abstract `f(x, y)` — `w` and `b` are the two coordinates being descended, and `L(w, b)`'s loss surface is the terrain. Every weight update a neural network performs during training is this same pattern, scaled from two parameters to millions.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">6</span><h2 class="sec-title">Curvature: the Hessian and a first look at Taylor series</h2></div>
+
+The gradient says which direction is downhill; it says nothing about how the slope itself is *changing* — whether the terrain is a gentle bowl or a narrow, steep-walled canyon. That's a question about the second derivative, and for a multivariable function it's answered by the **Hessian matrix**, `H`, whose `(i, j)` entry is `∂²f / ∂xᵢ∂xⱼ` — every pairwise combination of "how does the slope in direction `i` change as I move in direction `j`."
+
+For `f(x, y) = x² + y²`, `∂²f/∂x² = 2`, `∂²f/∂y² = 2`, and both mixed partials `∂²f/∂x∂y = 0` (moving in `y` doesn't change how steep `f` is in `x`, for this particular bowl-shaped function), so `H = [[2, 0], [0, 2]]` — constant curvature in every direction, which is exactly why `f(x, y) = x² + y²` is the easiest possible surface for gradient descent to descend: every direction curves upward at the same rate, so a single learning rate works equally well no matter which way a step happens to point. A Hessian with very different values along its diagonal describes a stretched, canyon-like bowl, where a learning rate tuned for the steep direction is far too small for the shallow one — a core reason plain gradient descent converges slowly on some loss surfaces and quickly on others, independent of how good the gradient itself is at any single point.
+
+The **Taylor series** makes the connection between gradient, Hessian, and the shape of `f` near a point explicit — it approximates `f` near a point `a` using its derivatives *at* `a`:
+
+<Formula name="Second-order Taylor approximation">
+f(x) ≈ f(a) + f'(a)·(x − a) + ½·f''(a)·(x − a)²
+</Formula>
+
+The first two terms are a straight line (the tangent line from Section 1 — using only the gradient); adding the third, curvature-dependent term bends that line into a parabola that hugs `f` far more closely near `a`. This is exactly what second-order optimization methods like Newton's method exploit: instead of taking a fixed-size step against the gradient, they use the Hessian to solve directly for the minimum of this local parabolic approximation, converging in far fewer steps on well-behaved surfaces — at the cost of computing and inverting a Hessian, which for a million-weight model is far too expensive to do every step. That tradeoff — first-order methods are cheap per step but need many steps, second-order methods need few steps but each one is expensive — is why gradient descent and its first-order variants, not Newton's method, train essentially every large neural network in practice.
+
+</section>
+
+<WorkTask label="Task 1 · Implement" title="Numerical vs. analytical derivatives, checked against each other">
+
+Using `numerical_derivative` from Section 1, verify the sigmoid derivative formula from Section 2 (`σ'(x) = σ(x)(1 − σ(x))`) at `x = -2, 0, 2`. Compute both the numerical and analytical derivative at each point and confirm they agree to at least 4 decimal places.
+
+```python
+import math
+
+def sigmoid(x):
+    return 1 / (1 + math.exp(-x))
+
+def sigmoid_derivative_analytical(x):
+    s = sigmoid(x)
+    return s * (1 - s)
+
+# TODO: for x in [-2, 0, 2], compute numerical_derivative(sigmoid, x)
+#       and sigmoid_derivative_analytical(x), compare them
+```
+
+<Solution>
+
+```python
+import math
+
+def sigmoid(x):
+    return 1 / (1 + math.exp(-x))
+
+def numerical_derivative(f, x, h=1e-5):
+    return (f(x + h) - f(x - h)) / (2 * h)
+
+def sigmoid_derivative_analytical(x):
+    s = sigmoid(x)
+    return s * (1 - s)
+
+for x in [-2, 0, 2]:
+    numeric = numerical_derivative(sigmoid, x)
+    analytic = sigmoid_derivative_analytical(x)
+    print(x, round(numeric, 6), round(analytic, 6))
+
+# x=-2: numeric ≈ 0.104994, analytic ≈ 0.104994
+# x= 0: numeric ≈ 0.250000, analytic ≈ 0.250000
+# x= 2: numeric ≈ 0.104994, analytic ≈ 0.104994
+```
+
+All three pairs agree to well beyond 4 decimal places, confirming the derivation. Notice `x = 0` gives the maximum value `0.25` from Section 2 (steepest point of the sigmoid curve), and `x = ±2` gives matching, smaller values — the curve is equally steep at equal distances from `0` because `σ(x)` is symmetric around `x = 0`, `y = 0.5`.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 2 · Implement" title="Gradient descent on a non-symmetric 2D bowl">
+
+Minimize `f(x, y) = x² + 10y²` using `gradient_descent_2d` from Section 4. This bowl is steep in `y` and shallow in `x` — a stretched version of Section 6's canyon example. Try `lr=0.1` and `lr=0.09` starting from `(x0, y0) = (8.0, 8.0)`, run 50 steps each, and report what happens. Then explain the result in terms of the Hessian from Section 6.
+
+<Solution>
+
+```python
+def gradient_descent_2d(grad_fn, x0, y0, lr=0.1, steps=50):
+    x, y = x0, y0
+    for _ in range(steps):
+        gx, gy = grad_fn(x, y)
+        x, y = x - lr * gx, y - lr * gy
+    return x, y
+
+grad = lambda x, y: (2 * x, 20 * y)   # partials of x^2 + 10y^2
+
+gradient_descent_2d(grad, 8.0, 8.0, lr=0.1, steps=50)
+# y diverges: lr * 20 = 2.0 > 1, so each y-step overshoots and grows in magnitude
+
+gradient_descent_2d(grad, 8.0, 8.0, lr=0.09, steps=50)
+# converges toward roughly (0.0, 0.0), slowly in x, steadily in y
+```
+
+At `lr=0.1`, the `y` coordinate diverges (the same overshoot mechanism from Section 3's `f(x) = x²` case: the effective per-step multiplier on `y` is `1 - lr·20 = 1 - 2 = -1`, which doesn't even shrink in magnitude), while `x` alone (multiplier `1 - lr·2 = 0.8`) would have converged just fine at that same learning rate. At `lr=0.09`, both coordinates converge, but `x` moves far more slowly than `y` per step, since its curvature (Hessian entry `∂²f/∂x² = 2`) is ten times smaller than `y`'s (`∂²f/∂y² = 20`).
+
+This is Section 6's canyon problem made concrete: one single learning rate has to be small enough to keep the steep `y` direction stable, which makes it needlessly small for the shallow `x` direction — exactly the situation a Hessian-aware or per-parameter method (covered in a later optimizers lesson) is built to fix.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 3 · Apply" title="Train linear regression by hand, then verify with code">
+
+Given the tiny dataset `xs = [1, 2, 3]`, `ys = [3, 5, 7]` (the true relationship is `y = 2x + 1`), use `mse_gradients` and `train_linear_regression` from Section 5 to fit `w` and `b`. First, by hand: compute `∂L/∂w` and `∂L/∂b` at the starting point `w=0, b=0` (before any training). Then run `train_linear_regression` and report the final `w, b` — how close do they land to the true `2` and `1`?
+
+<Solution>
+
+**By hand, at `w=0, b=0`:** predictions are `ŷᵢ = 0` for every `i`, so residuals are `(0 - 3, 0 - 5, 0 - 7) = (-3, -5, -7)`.
+
+`∂L/∂w = (2/3)·[(-3)(1) + (-5)(2) + (-7)(3)] = (2/3)·(-3 - 10 - 21) = (2/3)·(-34) ≈ -22.67`
+
+`∂L/∂b = (2/3)·[(-3) + (-5) + (-7)] = (2/3)·(-15) = -10.0`
+
+Both gradients are large and negative, meaning the update `w ← w - lr·∂L/∂w` and `b ← b - lr·∂L/∂b` will *increase* both `w` and `b` on the first step — exactly right, since the true relationship needs a positive slope and positive intercept and the model starts flat at zero.
+
+```python
+def mse_gradients(w, b, xs, ys):
+    n = len(xs)
+    residuals = [(w * x + b) - y for x, y in zip(xs, ys)]
+    dw = (2 / n) * sum(r * x for r, x in zip(residuals, xs))
+    db = (2 / n) * sum(residuals)
+    return dw, db
+
+def train_linear_regression(xs, ys, lr=0.01, epochs=200):
+    w, b = 0.0, 0.0
+    for _ in range(epochs):
+        dw, db = mse_gradients(w, b, xs, ys)
+        w, b = w - lr * dw, b - lr * db
+    return w, b
+
+xs, ys = [1, 2, 3], [3, 5, 7]
+w, b = train_linear_regression(xs, ys, lr=0.05, epochs=500)
+# w ≈ 2.0, b ≈ 1.0 — converges to the true relationship y = 2x + 1
+```
+
+With enough epochs at a reasonable learning rate, `w` and `b` converge to within a small fraction of `2.0` and `1.0` — the exact same descent mechanism from Task 2's `f(x, y) = x² + 10y²`, applied to a loss surface shaped by this dataset instead of a hand-picked formula.
+
+</Solution>
+</WorkTask>

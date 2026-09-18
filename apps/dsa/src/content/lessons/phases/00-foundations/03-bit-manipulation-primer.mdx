@@ -1,0 +1,229 @@
+---
+title: 'Bit Manipulation: <em>The Four Tricks That Cover Most of It</em>'
+subtitle: Almost every bit-manipulation problem is one of four primitives, one isolation
+  trick, and one loop — the hard part is recognizing which one, not writing it.
+summary: 'This lesson builds bit manipulation from the ground up: the four single-bit
+  primitives (test, set, clear, toggle), why two''s complement makes x & -x isolate
+  the lowest set bit, Brian Kernighan''s popcount loop and why it runs in popcount(n)
+  iterations instead of a fixed 32, and two of the trick''s most common applications
+  (Hamming distance, XOR swap). It closes with the language-specific traps — operator
+  precedence, signed vs. unsigned shifts, Python''s arbitrary-precision `~` — that
+  quietly turn correct-looking bit code into a bug.'
+phase: 00-foundations
+phaseTitle: Phase 00 — Foundations
+order: 3
+lessonNumber: 3
+pubDate: '2026-09-17'
+hook: 'n &= n - 1 clears exactly one bit: the lowest one that''s set. That single
+  line is the whole idea behind Fenwick trees, popcount, and half of every ''without
+  extra memory'' interview problem.'
+hookCredit: — the one line worth memorizing before the rest of this lesson
+sourceUrl: https://dsa.handbook.academy/curriculum/foundations/bit-manipulation-primer/
+---
+
+import Callout from "@florilex/tutorial-kit/components/Callout.astro";
+import Formula from "@florilex/tutorial-kit/components/Formula.astro";
+import WorkTask from "@florilex/tutorial-kit/components/WorkTask.astro";
+import Solution from "@florilex/tutorial-kit/components/Solution.astro";
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">1</span><h2 class="sec-title">Recognizing when a problem wants bits, not arithmetic</h2></div>
+
+Bit manipulation isn't a technique you reach for by default — it's a technique you reach for when the problem is quietly telling you the answer already lives in binary. Four signals are worth training yourself to notice.
+
+**The vocabulary in the problem statement.** "Hamming weight," "number of set bits," "1 bits," "how many bits differ," "parity," "XOR sum," "without using arithmetic operators," or "in O(1) extra space" are all close to literal invitations to think in binary rather than in base 10.
+
+**A small, fixed state space begging to be enumerated.** When a problem has at most ~20-30 boolean choices — which subset of items to include, which of n switches are on — every subset corresponds exactly to one integer from `0` to `2^n - 1`, and looping over that integer range enumerates every subset without ever building one explicitly.
+
+**Constraints that name the representation directly.** "Non-negative 32-bit integer," "binary representation," or an explicit bound like `0 <= n <= 2^31 - 1` are the problem telling you it cares about the bit pattern, not just the numeric value.
+
+**A transformation with a known closed-form bitwise expression.** Testing, setting, clearing, or toggling one bit; multiplying or dividing by a power of two; swapping two values — each of these has an exact one-line bitwise idiom, covered next, that replaces a loop or a temporary variable entirely.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">2</span><h2 class="sec-title">The four single-bit primitives</h2></div>
+
+Everything in this lesson builds on four idioms for manipulating a single bit at position `i` (counting from `0` at the least significant bit). Each one composes `1 << i` — a `1` shifted left until it lands exactly on bit `i` — with a different bitwise operator.
+
+```text
+Test bit i:    (x >> i) & 1      # shift bit i down to position 0, mask off everything else
+Set bit i:     x | (1 << i)      # OR-ing a 1 into a bit leaves it 1 no matter what it was
+Clear bit i:   x & ~(1 << i)     # AND-ing a 0 into a bit forces it 0 no matter what it was
+Toggle bit i:  x ^ (1 << i)      # XOR-ing a 1 flips a bit; XOR-ing a 0 leaves it alone
+```
+
+Worked on `x = 0b1011` (decimal 11): testing bit 2 gives `(0b1011 >> 2) & 1 = 0b10 & 1 = 0`, since bit 2 is unset. Setting bit 2 gives `0b1011 | 0b0100 = 0b1111`. Clearing bit 0 gives `0b1011 & ~0b0001 = 0b1011 & ...11110 = 0b1010`. Toggling bit 1 gives `0b1011 ^ 0b0010 = 0b1001`.
+
+The pattern worth internalizing is *why* each operator was chosen, not just memorizing the four lines: OR can only ever turn a bit on, AND-with-a-complement can only ever turn a bit off, and XOR is the one operator that depends on the existing value, which is exactly what makes it double as both "toggle" here and "difference detector" two sections from now.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">3</span><h2 class="sec-title">Two's complement and why x & -x isolates the lowest set bit</h2></div>
+
+One expression is worth knowing on sight: `x & -x` evaluates to a value with exactly one bit set — the lowest set bit of `x` — and nothing else. Seeing why requires knowing what negation actually does at the bit level.
+
+In two's complement (the representation essentially every language uses for signed integers), negation is defined as `-x = ~x + 1`: flip every bit, then add one. Take `x = 0b01100` (12). Flipping every bit gives `0b10011`. Adding `1` gives `0b10100`, which is `-12` in two's complement. Now line up `x` and `-x`:
+
+```text
+ x  = 0b01100
+-x  = 0b10100
+ x & -x = 0b00100   <- only bit 2 survives
+```
+
+The mechanism: flipping every bit of `x` turns every trailing `0` into a trailing `1`, and turns the lowest set bit of `x` into a `0`. Adding `1` to that flipped value then ripples a carry through all those new trailing `1`s, flipping each back to `0`, and the carry finally stops the instant it hits the position that was `x`'s lowest set bit — turning that one bit from `0` to `1` and stopping there, since there's no further carry to propagate. Every bit above the lowest set bit is identical between `~x` (before the add) and `x` itself is irrelevant to those higher bits' fate, but crucially, `-x`'s bits above the lowest-set-bit position end up as the exact complement of `x`'s bits there — so ANDing `x` and `-x` cancels every one of those higher positions to `0`, and the *only* position where both `x` and `-x` agree on a `1` is that lowest set bit.
+
+<Callout label="Takeaway">
+`x & -x` returns the lowest set bit's *value* (a power of two, like `4` for bit 2), not its *position* (`2`). Confusing the two is the most common bug when this idiom shows up in Fenwick-tree index walks (`i += (i & -i)`), which this primer is building toward.
+</Callout>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">4</span><h2 class="sec-title">Brian Kernighan's loop: counting set bits in popcount(n) steps</h2></div>
+
+Counting how many bits of `n` are set — its **popcount**, or Hamming weight — has an obvious O(32) solution: test all 32 bit positions one at a time. Brian Kernighan's loop does better by never even looking at a bit that's already `0`.
+
+The core move is `n &= n - 1`. Subtracting `1` from `n` flips every trailing `0` bit to `1` and flips the lowest set bit to `0` (the mirror image of the addition-with-carry from Section 3). ANDing that result back with the *original* `n` then zeroes out every one of those newly-flipped trailing `1`s (since the original had `0`s there), while the lowest set bit — now `0` on one side — also lands at `0`. Net effect: one line clears exactly the lowest set bit and touches nothing else.
+
+**Hand trace on `n = 11 = 0b1011`:**
+```text
+n = 1011   (start, count = 0)
+n &= n-1 -> 1011 & 1010 = 1010   (cleared bit 0, count = 1)
+n &= n-1 -> 1010 & 1001 = 1000   (cleared bit 1, count = 2)
+n &= n-1 -> 1000 & 0111 = 0000   (cleared bit 3, count = 3)
+# n == 0, stop. popcount(11) == 3
+```
+
+```python
+def popcount(n):
+    count = 0
+    while n:
+        n &= n - 1   # clear the lowest set bit
+        count += 1
+    return count
+```
+
+The loop runs exactly `popcount(n)` times, not a fixed 32 — a sparse number like `0b10000000000000000000000000000001` finishes in 2 iterations, not 32, which is where the algorithm earns its keep over the naive bit-by-bit scan.
+
+A direct corollary falls out for free: `n & (n - 1) == 0` if and only if `n` is a power of two (for `n > 0`) — a power of two has exactly one set bit, and clearing that one bit leaves nothing behind. (The technique is often attributed to Kernighan because it appears as exercise 2-9 in *The C Programming Language* (1988), though Peter Wegner had already published it in 1960.)
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">5</span><h2 class="sec-title">Two applications: Hamming distance and the XOR swap</h2></div>
+
+**Hamming distance** between two integers is the number of bit positions where they differ, and it has a one-line closed form: `hamming_distance(x, y) = popcount(x ^ y)`. XOR sets a bit to `1` exactly where its two operands disagree and to `0` where they agree — that's the same property that made XOR the right choice for "toggle" in Section 2 — so `x ^ y` is a bitmask of every differing position, and popcount (Section 4) just counts how many there are. For `x = 1 = 0b0001` and `y = 4 = 0b0100`: `x ^ y = 0b0101`, which has 2 set bits, so the Hamming distance is 2.
+
+**The XOR swap** trades a temporary variable for three XOR operations:
+```python
+a ^= b   # a now holds a ^ b
+b ^= a   # b now holds b ^ (a ^ b) == a   (b XOR itself cancels to 0, leaving a)
+a ^= b   # a now holds (a ^ b) ^ a == b   (a XOR itself cancels to 0, leaving b)
+```
+Each line follows from the same two facts about XOR: `v ^ v == 0` for any value, and `v ^ 0 == v`. Working through it bit-by-bit at each line is the only way to actually trust it, in the same spirit as the leap-of-faith habit from the recursion lesson — trust the algebra, then verify it once.
+
+This idiom has one sharp edge: it fails if `a` and `b` are the same memory location (e.g. calling it to "swap" `arr[i]` and `arr[j]` when `i == j`). The first line becomes `a ^= a`, which zeroes the value instead of leaving it unchanged, and the following two lines just XOR zero into an already-destroyed value — silently corrupting data instead of swapping it. A defensive guard (`if i != j:` before swapping) is required anywhere the two indices could alias; in practice, `a, b = b, a` or an explicit temporary is almost always the better default, and the XOR swap is more a piece of bit-manipulation literacy than code you should actually reach for.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">6</span><h2 class="sec-title">Where bit code quietly breaks: precedence, signed shifts, and Python's ~</h2></div>
+
+Three traps account for most bit-manipulation bugs that pass a quick read-through.
+
+**Operator precedence.** `&`, `|`, and `^` bind *looser* than comparison operators in C-family languages, which is the opposite of what most people assume. `x & 1 == 0` parses as `x & (1 == 0)`, i.e. `x & False`, i.e. `x & 0`, which is always `0` (falsy) — silently wrong for every input, not just some. Always parenthesize: `(x & 1) == 0`. This mistake is common enough that gcc ships a dedicated `-Wparentheses` warning for exactly this pattern.
+
+**Signed right shift.** `>>` on a negative number doesn't behave the same way across languages. Java distinguishes `>>` (arithmetic — sign-extends, fills new high bits with copies of the sign bit) from `>>>` (logical — zero-fills regardless of sign); C++ leaves right-shifting a negative value implementation-defined pre-C++20; Python's `>>` always rounds toward negative infinity, consistent with its arbitrary-precision integers. A popcount loop written with `>>` on a signed negative input in Java will sign-extend forever and never reach zero the way an unsigned shift would — which is one more reason `n &= n - 1` (Section 4) is the safer idiom generally: it never shifts at all, so it's sign-agnostic by construction. When a shift is unavoidable, the safe reflex is to convert to an unsigned type first, or use `>>>` explicitly in Java.
+
+**Python's `~` on a "positive" int.** Python integers are arbitrary-precision, not fixed-width, so there's no fixed set of leading bits for `~` to flip into visible existence — Python instead defines `~x` algebraically as `-(x + 1)`, so `~5 == -6`, not the `0xFFFFFFFA` a C programmer might expect from a 32-bit mental model. For genuine fixed-width bit work in Python, mask explicitly after negating: `(~x) & 0xFFFFFFFF` recovers the 32-bit bit pattern.
+
+<Callout label="Careful" variant="warn">
+Every one of these three traps produces code that runs without error and returns a plausible-looking wrong answer — none of them crash. Test bit-manipulation code specifically against negative numbers, zero, and the maximum value in range; those are exactly the inputs where sign-extension and precedence bugs diverge from the intended behavior.
+</Callout>
+
+</section>
+
+<WorkTask label="Task 1 · Implement" title="Popcount, and why the loop bound matters">
+
+Implement `popcount(n)` using Brian Kernighan's `n &= n - 1` loop from Section 4. Then answer: for a 32-bit unsigned integer, what's the maximum possible number of loop iterations, and what's the minimum (for `n > 0`)? Which specific inputs achieve each extreme?
+
+<Solution>
+
+```python
+def popcount(n):
+    count = 0
+    while n:
+        n &= n - 1
+        count += 1
+    return count
+```
+
+**Maximum iterations: 32**, achieved when every bit is set — `n = 0xFFFFFFFF` (all 32 bits `1`) requires clearing all 32 of them, one per iteration. This is the case where Kernighan's loop offers no advantage over a fixed 32-iteration bit scan.
+
+**Minimum iterations (for `n > 0`): 1**, achieved by any power of two — `n = 1`, `n = 8`, `n = 0x80000000`, etc. — since a power of two has exactly one set bit, and clearing it (Section 4's power-of-two corollary: `n & (n-1) == 0` afterward) ends the loop immediately regardless of how large the number's *position* is. This is exactly why the loop is described as running in `popcount(n)` iterations rather than `log2(n)` or a fixed bound — a huge, sparse number finishes fast; a dense number near `2^32 - 1` does not, independent of magnitude.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 2 · Trace" title="Hamming distance by hand">
+
+Using the closed form from Section 5 (`hamming_distance(x, y) = popcount(x ^ y)`), compute the Hamming distance between `x = 14` and `y = 11` by hand: write both numbers in binary, compute the XOR, and count the set bits. Then explain in one sentence why computing this by counting differing positions directly (comparing bit `i` of `x` to bit `i` of `y` in a loop) gives the same answer as the XOR-then-popcount approach — they're not two coincidentally-equal methods, they're the same method described two ways.
+
+<Solution>
+
+`x = 14 = 0b1110`, `y = 11 = 0b1011`.
+
+```text
+  1110
+XOR 1011
+  ----
+  0101
+```
+
+`0b0101` has 2 set bits (positions 0 and 2), so `hamming_distance(14, 11) = popcount(0b0101) = 2` — bit 0 differs (`0` vs `1`) and bit 2 differs (`1` vs `0`); bits 1 and 3 agree.
+
+**Why they're the same method:** XOR is defined, bit by bit, as "1 exactly where the two inputs disagree" — which is the literal definition of a differing position. Comparing `x`'s bit `i` to `y`'s bit `i` in a loop and counting mismatches *is* computing `x ^ y` one bit at a time and counting its set bits by hand; `popcount(x ^ y)` just does the same comparison for all bit positions simultaneously as a single hardware-level operation instead of a loop with an explicit comparison per iteration.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 3 · Debug" title="Find the bug in each snippet">
+
+Each snippet below is meant to do what its comment says, but has a bug from Section 6. Identify the bug and fix it.
+
+```python
+# (a) Meant to: return True if x is even
+def is_even(x):
+    return x & 1 == 0
+```
+
+```java
+// (b) Meant to: popcount a possibly-negative 32-bit int using a naive bit scan
+int popcountNaive(int n) {
+    int count = 0;
+    for (int i = 0; i < 32; i++) {
+        count += n & 1;
+        n = n >> 1;
+    }
+    return count;
+}
+```
+
+```python
+# (c) Meant to: return the 32-bit two's-complement bit pattern of ~x for a non-negative x < 2**32
+def bitwise_not_32(x):
+    return ~x
+```
+
+<Solution>
+
+**(a) Operator precedence.** `x & 1 == 0` parses as `x & (1 == 0)` = `x & False` = `x & 0`, which is `0` (falsy) for *every* `x`, so `is_even` always returns `False`. Fix: `return (x & 1) == 0`.
+
+**(b) Signed right shift (Java's arithmetic `>>`).** For a negative `n`, `n >> 1` sign-extends — it fills the new high bit with a copy of the sign bit (`1`) rather than `0` — so `n` never reaches `0` after shifting out all original bits; the loop still terminates after 32 fixed iterations here (it's a `for`, not a `while (n != 0)`), but for negative inputs it will have kept re-testing sign-extended `1`s in the high positions it already "used up," corrupting the count for negative `n`. Fix: use the logical shift `n = n >>> 1` (Java's zero-fill shift), or better, switch to Kernighan's `n &= n - 1` loop from Section 4, which never shifts and is correct for negative input without any special-casing.
+
+**(c) Python's arbitrary-precision `~`.** `~x` in Python is defined as `-(x + 1)`, not a fixed-width bit flip — for `x = 5`, `~x` returns `-6`, a negative Python int, not the 32-bit pattern `0xFFFFFFFA` the comment asks for. Fix: mask after negating — `return (~x) & 0xFFFFFFFF` — which takes Python's mathematically-correct-but-infinite-width `~x` and truncates it to the 32 bits that represent the intended fixed-width pattern.
+
+</Solution>
+</WorkTask>

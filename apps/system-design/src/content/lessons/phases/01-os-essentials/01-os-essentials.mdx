@@ -1,0 +1,175 @@
+---
+title: 'OS Essentials for System Design: <em>What the Kernel Actually Charges You</em>'
+subtitle: Every "just add a cache" or "just use async I/O" in a system design conversation
+  is a claim about how the kernel spends time, and the kernel's price list is not
+  optional reading.
+summary: 'This lesson builds the operating-system vocabulary that sits underneath
+  every system design decision: what a context switch between processes versus threads
+  actually costs, the eight-orders-of-magnitude memory hierarchy that makes caching
+  non-negotiable, the three I/O models that solved the C10K problem in sequence, why
+  fsync is expensive and how group commit hides that cost, and when io_uring''s raw
+  throughput is worth its security tradeoffs. It closes with Redis''s single-threaded
+  event loop as a worked example of most of these ideas applied at once, plus a durable-ingestion
+  design exercise.'
+phase: 01-os-essentials
+phaseTitle: Phase 01 — OS Essentials
+order: 2
+lessonNumber: 1
+pubDate: '2026-09-17'
+hook: A thread pool, a page cache, and an epoll loop are not implementation details
+  — they are the actual mechanism behind every latency number a system design diagram
+  promises.
+hookCredit: — why the kernel is not optional reading for a system design interview
+sourceUrl: https://hld.handbook.academy/curriculum/prerequisites/os-essentials/
+---
+
+import Callout from "@florilex/tutorial-kit/components/Callout.astro";
+import Formula from "@florilex/tutorial-kit/components/Formula.astro";
+import WorkTask from "@florilex/tutorial-kit/components/WorkTask.astro";
+import Solution from "@florilex/tutorial-kit/components/Solution.astro";
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">1</span><h2 class="sec-title">Processes vs. threads: buying isolation with a context switch</h2></div>
+
+A process and a thread solve the same problem — give a unit of work its own execution context — with opposite defaults, and Linux creates both through the same `clone(2)` syscall, just with different flags. A process gets its own virtual address space, file descriptor table, and everything else; a thread created with `CLONE_VM` shares all of that with its parent, differing mainly in its own stack and registers. That shared address space is why threads are cheap to switch between and processes aren't: switching between threads in the same process leaves the page tables untouched, so the CPU's translation lookaside buffer (TLB) — the cache that maps virtual addresses to physical ones — stays warm. Switching between processes changes the address space, and on hardware without address-space-identifier (ASID) tagging, that forces a TLB flush, discarding every cached translation and paying for it back on the next round of memory accesses. In practice this puts thread switches at roughly 1 microsecond with a warm TLB, versus roughly 3-5 microseconds for a process switch — a gap that compounds fast at high request rates, since it's paid on every single handoff.
+
+The decision this feeds isn't "threads are just faster, use them" — it's a real isolation tradeoff. A crashing thread can corrupt its whole process's shared memory and take every other thread down with it; a crashing process takes only itself down, which is exactly why a browser runs each tab as a separate process and a multi-tenant service that executes untrusted code isolates tenants at the process boundary, not the thread boundary, no matter what it costs in switch overhead. Reach for threads when the units of work are trusted and need to share state cheaply (workers pulling from an in-memory queue); reach for processes when a crash or a security boundary in one unit must not be able to reach another.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">2</span><h2 class="sec-title">The memory hierarchy: eight orders of magnitude, and why the top tier wins every argument</h2></div>
+
+Every storage tier a system touches sits on a latency ladder so steep that the numbers stop feeling like the same kind of quantity: an L1 cache reference costs about 0.5 nanoseconds, a main-memory reference costs about 100 nanoseconds — 200x slower than L1 — a random 4 KB read from NVMe costs 20-70 microseconds, a round trip to another machine in the same datacenter costs about 500 microseconds, and a round trip across a continent costs roughly 150 milliseconds. Each step down that ladder is roughly two to three orders of magnitude slower than the one above it, which is why the ladder is usually drawn in log scale — a linear chart would make everything below main memory invisible.
+
+<Formula name="The one-tier rule">
+Moving hot data one tier higher (disk → page cache, page cache → application memory, cross-DC → same-DC) typically buys more latency improvement than any algorithmic change made without touching where the data physically lives.
+</Formula>
+
+This is the number underneath why "put a cache in front of the database" is close to a universal answer in system design rather than a workload-specific one: a cache hit in Redis (main memory, same host or one network hop away) beats a database read that misses its own page cache and touches disk by four to five orders of magnitude, a gap no query optimization on the disk-bound path can close. The same ladder is why a system designer asks "is this working set hot or cold" before asking almost anything else about a storage layer — the answer to that question predicts the latency budget more reliably than the choice of database engine does.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">3</span><h2 class="sec-title">I/O models and the C10K problem</h2></div>
+
+Handling many concurrent connections ran into a wall in the late 1990s known as the C10K problem — could a single server hold open 10,000 simultaneous connections? — and the answer required rethinking how a process waits on I/O, in three stages.
+
+**Blocking I/O, one thread per connection** is the simplest model: each accepted connection gets its own thread, which blocks on a `read()` until data arrives. It's easy to reason about, but each thread reserves its own stack — commonly around 8 MB by default — so 10,000 threads means roughly 80 GB of address space committed to stacks alone before a single byte of application logic runs, on top of the per-switch cost from Section 1 now being paid 10,000 times over.
+
+**Multiplexing (`select`/`poll`/`epoll`)** lets one thread watch many file descriptors and wake up only when at least one is ready, eliminating the per-connection thread. The mechanisms differ sharply in how they scale: `select` and `poll` require the kernel to walk the entire watched set on every call, an O(n) cost that grows with total connections regardless of how many are actually active; `epoll` (Linux) and `kqueue` (BSD/macOS) instead return only the file descriptors that are ready, an O(ready) cost that scales with *activity*, not with how many connections happen to be open — the property that actually solves C10K, since most held-open connections at any instant are idle.
+
+<Callout label="Careful" variant="warn">
+Edge-triggered epoll notifies once per state transition, not once per available byte — a handler that reads part of the buffer and returns will not be notified again until *new* data arrives, even though old data is still sitting there unread. Every edge-triggered handler must loop on `read()` until it hits `EAGAIN`, or it will silently stall on connections that looked like they were delivering data correctly in testing.
+</Callout>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">4</span><h2 class="sec-title">io_uring and the kernel-bypass frontier</h2></div>
+
+Multiplexing still pays a syscall per read or write once a file descriptor is ready — `epoll` tells you *what's* ready, but you still call `read()` or `write()` to act on it. `io_uring` removes even that: the application and kernel share a pair of ring buffers in memory, a submission queue where the application enqueues operations and a completion queue where the kernel posts results, and both sides can process many operations per pass without a syscall per operation. For I/O-bound workloads at high request rates, this converts a syscall-per-operation cost into an amortized cost across a whole batch, which is why storage engines and high-throughput proxies have adopted it aggressively since it landed in Linux 5.1.
+
+That power comes with a real security cost that a system designer has to weigh, not just a performance one. Because `io_uring` operations can execute asynchronously via kernel worker threads, a process's own `seccomp` syscall filter — the sandbox a container runtime or browser process relies on to block a compromised process from making dangerous syscalls directly — does not get re-evaluated for work submitted through the ring; the operation the filter meant to block can still happen, just dispatched a different way. That gap, combined with a run of memory-safety CVEs in the `io_uring` subsystem, is the specific reason Android, ChromeOS, and gVisor disabled `io_uring` for untrusted code rather than trying to sandbox it.
+
+<Callout label="Takeaway">
+Treat `io_uring` as justified for trusted, single-tenant, throughput-critical code paths — a database's own storage engine, an internal proxy — and treat it as disqualified for anything executing code you don't control, regardless of the throughput it's leaving on the table.
+</Callout>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">5</span><h2 class="sec-title">Page cache, fsync, and the group-commit trick</h2></div>
+
+The kernel's page cache transparently keeps recently-read (and recently-written) file contents in spare RAM, so a "disk read" that's actually served from page cache costs roughly a memory access, not a disk access — the same one-tier-higher win from Section 2, applied automatically by the kernel without the application asking for it. This is also why a first, cold read of a file and a second, warm read of the same file can differ by 100x to 100,000x, and why a naive benchmark that never evicts the page cache between runs will report numbers no production cold-start will ever see.
+
+The page cache buys speed, not durability: a write can sit in cache, acknowledged to the application, and still vanish on power loss until it's actually forced to the device. `fsync()` forces exactly that — and on NVMe it typically costs 1-10 milliseconds, which is enormous relative to the microsecond-scale operations around it, because it's waiting on physical media, not memory. Calling `fsync` after every single write caps throughput at roughly one write per fsync latency, however fast the rest of the pipeline is.
+
+<Formula name="Group commit">
+Effective per-write fsync cost ≈ fsync latency ÷ writes batched per fsync call
+</Formula>
+
+Group commit is the standard answer: buffer incoming writes for a short window, append them together, issue one `fsync`, then acknowledge every client whose write was in that batch. A 2 ms fsync amortized across a batch of 200 writes costs each write about 10 microseconds of durability tax instead of 2 milliseconds — a 200x reduction bought entirely by batching, with no change to the disk itself.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">6</span><h2 class="sec-title">Syscalls and the kernel boundary: the vDSO shortcut</h2></div>
+
+Every syscall is a privilege transition — the CPU switches from user mode to kernel mode, the kernel does the work, and control transitions back — and that switch alone costs on the order of hundreds of nanoseconds even before the syscall does anything, because of the mode-switch machinery and the cache and pipeline disruption it causes. For a syscall like `clock_gettime()`, called extremely frequently by latency-sensitive code (timers, logging timestamps, tracing), that fixed overhead can dominate the actual cost of the operation, which is just reading a counter.
+
+The virtual dynamic shared object (vDSO) is the kernel's fix for exactly this case: for a small set of syscalls that don't need to touch anything privileged — `clock_gettime`, `gettimeofday`, `getcpu` — the kernel maps a page of code directly into every process's address space that computes the answer in userspace, no mode switch at all. That brings a `clock_gettime` call down from the hundreds-of-nanoseconds syscall path to roughly 20-30 nanoseconds. The general lesson extends past this one example: syscall overhead is fixed per call, not per byte, so any workload issuing one syscall per small message — one `write()` per log line, one `sendto()` per UDP packet — pays that fixed cost far more times than necessary; batching those operations (`sendmmsg` for multiple UDP datagrams in one call, or `io_uring` from Section 4 for arbitrary batched operations) amortizes the same fixed cost across many operations instead of one.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">7</span><h2 class="sec-title">Case study: Redis as one coherent answer to every section above</h2></div>
+
+Redis's core event loop is a useful capstone because it's a production system built by explicitly refusing several of the costs covered in this lesson rather than trying to optimize around them. It runs as a **single thread** handling all client commands, which means it never pays the process- or thread-context-switch cost from Section 1 between one command and the next — there's nothing to switch to. It keeps the entire working dataset in **main memory**, which is the one-tier-higher move from Section 2 applied at the scale of the whole database, not just a cache in front of one. It watches all client sockets through **multiplexing**, using a small abstraction layer (`ae`) that at compile time picks the best backend the host offers — `evport` on Solaris, `epoll` on Linux, `kqueue` on BSD/macOS, falling back to `select` only if none of those exist — which is Section 3's C10K solution, chosen automatically per platform rather than hardcoded.
+
+The result is a single-threaded process that comfortably handles on the order of 100,000 operations per second and tens of thousands of concurrent connections, with no locks and no context switches between commands, because command execution is strictly serialized by construction rather than coordinated after the fact. Durability is handled by the same fsync/group-commit tradeoff from Section 5: Redis's append-only file (AOF) persistence offers an `appendfsync` setting of `always` (fsync every write — safest, slowest), `everysec` (fsync once per second, batching everything in between — the group-commit compromise most deployments actually run), or `no` (let the kernel decide, fastest, least durable). The whole architecture is a direct, legible answer to "what does an OS-aware design look like when every one of these tradeoffs is made deliberately instead of by default."
+
+</section>
+
+<WorkTask label="Task 1 · Classify" title="Pick the right execution and I/O model">
+
+For each scenario, name the specific mechanism from this lesson that fits, and justify it against at least one alternative:
+
+(a) A multi-tenant PaaS that runs arbitrary customer-submitted code and must guarantee one customer's crash or exploit can't touch another customer's data.
+(b) A web server expecting 50,000 mostly-idle, long-lived connections (e.g. an SSE fanout server from the networking lesson) on a single host.
+(c) A worker pool that all pull jobs from the same in-memory queue and share a hot, frequently-updated cache — crash isolation between workers isn't a requirement.
+(d) A single-tenant, high-throughput storage engine issuing tens of thousands of small reads and writes per second, where every microsecond of syscall overhead is measurable in the p99.
+(e) A sandboxed function-as-a-service runtime executing untrusted user functions, deciding whether to give those functions access to `io_uring`.
+
+<Solution>
+
+**(a) Process-level isolation, not threads.** A crashing or malicious tenant must not be able to corrupt another tenant's memory — that's exactly the boundary a shared address space (threads) doesn't provide and separate address spaces (processes, or containers built on them) do, from Section 1.
+
+**(b) `epoll` (or `kqueue`), not thread-per-connection.** 50,000 threads at ~8 MB of stack each is roughly 400 GB of committed address space before any application logic runs; `epoll`'s O(ready) model handles tens of thousands of mostly-idle connections on one thread, which is precisely the C10K problem this lesson's Section 3 describes.
+
+**(c) Threads.** No isolation boundary is required, the workers need to share state cheaply (the hot cache), and thread switches are roughly 3-5x cheaper than process switches — there's no isolation benefit here to justify paying the process-switch cost.
+
+**(d) `io_uring`.** This is squarely the case Section 4 describes as justified: trusted, single-tenant code where the syscall-per-operation cost is a measured bottleneck, not a sandboxing context where the seccomp-bypass risk matters.
+
+**(e) Deny it.** This is a sandboxed, untrusted-code context — exactly the case Section 4 flags: `io_uring`'s async dispatch through kernel worker threads doesn't get re-checked against the sandbox's seccomp filter, which is the specific reason Android, ChromeOS, and gVisor disable it for untrusted code rather than trying to sandbox around it.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 2 · Apply" title="Design a durable log-ingestion service">
+
+You're designing a service that must accept 100,000 writes per second, each roughly 1 KB, with a durability guarantee: once a write is acknowledged, it must survive a power loss. A single `fsync()` call on your NVMe storage takes 2 milliseconds.
+
+(a) If you naively called `fsync()` after every individual write before acknowledging it, what's the maximum writes-per-second throughput that durability requirement alone would cap you at — and how does that compare to the 100,000/s target?
+(b) Design an architecture that hits the 100,000/s target while keeping the same durability guarantee. Name the I/O model you'd use to accept the writes and the mechanism that makes the fsync cost tolerable.
+(c) With your design, if you batch every write that arrives within a 5 ms window before issuing one fsync, and the service is running at the full 100,000 writes/sec, roughly how many writes land in each batch, and what's the effective per-write durability cost?
+
+<Solution>
+
+**(a)** One fsync per write caps you at 1 write per 2 ms, i.e. 500 writes/second — 200x below the 100,000/s target. Durability, not network or CPU, would be the bottleneck, and no amount of parallelizing the non-durability parts of the pipeline fixes it, because every single write is serialized behind its own fsync call.
+
+**(b)** Accept connections through an **async event loop** (`epoll` or `io_uring`, from Sections 3-4 — this is a single-tenant storage service, so `io_uring`'s syscall-batching is a reasonable choice if the throughput target demands it) rather than blocking one thread per writer. On the durability side, use **group commit** (Section 5): buffer incoming writes in memory, append them to the log together, issue a single `fsync` for the whole batch, then acknowledge every writer whose data was included — turning N writes' durability cost into one fsync's cost, amortized across N.
+
+**(c)** At 100,000 writes/sec, a 5 ms window collects roughly 100,000 × 0.005 = 500 writes per batch. Each batch pays one 2 ms fsync, so the effective per-write durability cost is 2 ms ÷ 500 ≈ 4 microseconds — comfortably inside the throughput budget, versus the 2 ms per write the naive design paid. The tradeoff being bought: any write in an in-flight batch is acknowledged up to 5 ms later than an unbatched write would be, and a crash mid-batch (before that batch's single fsync completes) loses the whole batch, not just one write — group commit trades a small, bounded increase in per-write latency and blast radius for a two-orders-of-magnitude throughput win.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 3 · Design" title="Diagnose a benchmark that lied">
+
+A team benchmarks a new database storage engine on a fresh EC2 instance: they load 10 GB of data, then immediately run a read-heavy benchmark and measure an average read latency of 8 microseconds per read. They deploy to production, where the same engine (same instance type, same dataset size) shows average read latency of 65 microseconds — 8x worse than the benchmark predicted, with no code difference.
+
+(a) Using concepts from this lesson, name the most likely cause of the gap, and explain the mechanism precisely.
+(b) What change to the benchmark methodology would have caught this before deployment?
+(c) Separately, the team also notices that during a traffic spike, their write-heavy path (which calls `fsync` after every write) shows latency spikes correlated exactly with spikes in concurrent write volume, even though each individual fsync call still reports ~2 ms in isolated testing. What's going on, and what's the standard fix?
+
+<Solution>
+
+**(a) Cold vs. warm page cache — the pitfall named in Section 5.** Loading 10 GB and immediately benchmarking means most of that data is still resident in the page cache from the load itself, so "reads" during the benchmark are mostly warm page-cache hits (memory-speed, matching the ~100 ns-to-low-microsecond range from Section 2's hierarchy) rather than real disk reads. In production, under real traffic patterns and with other processes competing for RAM, a much larger fraction of reads are genuinely cold and pay actual NVMe random-read latency (20-70 microseconds from Section 2) — the 65 microsecond production number is closer to the true cold-read cost than the artificially warm 8 microsecond benchmark number.
+
+**(b)** Evict or bypass the page cache before benchmarking reads — e.g. drop caches (`echo 3 > /proc/sys/vm/drop_caches` on Linux, in a controlled test environment) or read a dataset larger than available RAM so cache hits can't dominate, and benchmark under a working set and access pattern that resembles production (including memory pressure from other processes), not an artificially warm, freshly-loaded dataset.
+
+**(c)** Each individual fsync still costs ~2 ms because the device itself isn't slower — but under concurrent write load without batching, multiple writers are each independently blocking on their own fsync call, and if those calls aren't coordinated, the effective latency a given request experiences includes queueing behind other writers' fsyncs, not just its own. The standard fix is the same group-commit mechanism from Task 2 and Section 5: coordinate concurrent writers so they share a single fsync per batch instead of each issuing their own, which both amortizes the fixed 2 ms cost across many writers and removes the queueing effect of many independent fsync calls competing for the same underlying device.
+
+</Solution>
+</WorkTask>

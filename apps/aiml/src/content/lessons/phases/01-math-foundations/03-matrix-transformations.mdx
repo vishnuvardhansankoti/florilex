@@ -1,0 +1,245 @@
+---
+title: 'Matrix Transformations: <em>Where Space Goes, and What Stays Put</em>'
+subtitle: Lesson 02 gave you the operations. This lesson gives you the geometry —
+  what a matrix actually <em>does</em> to the plane, and the special directions eigenvectors
+  reveal it can't touch.
+summary: 'This lesson treats 2D matrices as machines that reshape space: rotation,
+  scaling, shearing, and reflection are each built from where they send the basis
+  vectors, and composing two transformations is exactly matrix multiplication — in
+  an order that matters, because matrix multiplication isn''t commutative. It then
+  introduces eigenvalues and eigenvectors as the directions a matrix only scales,
+  never rotates, derived from the characteristic equation det(A - λI) = 0. It closes
+  by connecting that one computation to three places it shows up in ML: PCA''s principal
+  directions, the spectral-radius intuition behind exploding/vanishing gradients in
+  RNNs, and spectral clustering''s use of the graph Laplacian''s eigenvectors.'
+phase: 01-math-foundations
+phaseTitle: Phase 01 — Math Foundations
+order: 3
+lessonNumber: 3
+pubDate: '2026-09-16'
+hook: '"Every matrix has directions it refuses to rotate — it only stretches them.
+  Find those, and you''ve found what the matrix is actually made of."'
+hookCredit: — eigenvectors, one lesson before they show up disguised as PCA, RNN stability,
+  and spectral clustering
+sourceUrl: https://aiengineeringfromscratch.com/lesson?path=phases%2F01-math-foundations%2F03-matrix-transformations
+---
+
+import Callout from "@florilex/tutorial-kit/components/Callout.astro";
+import Formula from "@florilex/tutorial-kit/components/Formula.astro";
+import WorkTask from "@florilex/tutorial-kit/components/WorkTask.astro";
+import Solution from "@florilex/tutorial-kit/components/Solution.astro";
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">1</span><h2 class="sec-title">A matrix is where the basis vectors land</h2></div>
+
+A 2×2 matrix is completely determined by two vectors: where it sends `e₁ = [1, 0]` and where it sends `e₂ = [0, 1]`. Those two images *are* the columns of the matrix — there's no other information hiding in it.
+
+That falls out of linearity, the one rule every matrix transformation has to obey: `M(a·u + b·v) = a·M(u) + b·M(v)`. Every point in the plane is `x·e₁ + y·e₂` for some `x, y`, so once you know where the two basis vectors land, linearity hands you every other point for free: `M([x, y]) = x·(column 1) + y·(column 2)`.
+
+That's the lens for this whole lesson. Instead of reading a matrix as a grid of numbers, read it as: 'where does this send `e₁`, and where does it send `e₂`' — and the rest of the plane's fate is already decided.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">2</span><h2 class="sec-title">Rotation: spinning without stretching</h2></div>
+
+A rotation by angle `θ` (counterclockwise) sends `e₁` to `[cos θ, sin θ]` and `e₂` to `[-sin θ, cos θ]` — walk those two points around the unit circle and you'll see both basis vectors swept counterclockwise by exactly `θ`, still 90° apart.
+
+<Formula name="2D rotation matrix">
+R(θ) = [[cos θ, −sin θ], [sin θ, cos θ]]
+</Formula>
+
+Multiply any vector by `R(θ)` and it keeps its length and its angle to every other vector — nothing stretches, nothing shears. That's a property of the matrix itself: its columns are unit length and perpendicular to each other (an **orthogonal** matrix, `Rᵗ R = I`), and `det(R) = cos²θ + sin²θ = 1`, confirming area is preserved and orientation isn't flipped.
+
+```python
+import math
+
+def rotation_matrix(theta: float) -> list[list[float]]:
+    c, s = math.cos(theta), math.sin(theta)
+    return [[c, -s], [s, c]]
+
+def apply(M: list[list[float]], v: list[float]) -> list[float]:
+    return [sum(M[i][j] * v[j] for j in range(len(v))) for i in range(len(M))]
+```
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">3</span><h2 class="sec-title">Scaling, shearing, reflection — the other elementary moves</h2></div>
+
+Three more basic transformations, each a one-line edit to the identity matrix:
+
+- **Scaling** stretches each axis independently: `diag(sx, sy)` sends `e₁ → [sx, 0]` and `e₂ → [0, sy]`.
+- **Shearing** tilts one axis while leaving the other fixed: `[[1, k], [0, 1]]` leaves `e₁` in place and slides `e₂` sideways by `k`.
+- **Reflection** flips across a line: reflecting across the x-axis is `[[1, 0], [0, -1]]` — it negates just the y-coordinate.
+
+```python
+def scale_matrix(sx: float, sy: float) -> list[list[float]]:
+    return [[sx, 0.0], [0.0, sy]]
+
+def shear_matrix(k: float) -> list[list[float]]:
+    return [[1.0, k], [0.0, 1.0]]
+
+def reflect_x_matrix() -> list[list[float]]:
+    return [[1.0, 0.0], [0.0, -1.0]]
+```
+
+As Lesson 02's determinant covered, `det` tells you what each of these does to area and orientation: scaling by `(sx, sy)` has `det = sx·sy` (area multiplies by that factor); shearing has `det = 1` (area is preserved, only angles change); reflection has `det = -1` (area is preserved but orientation flips — a shape and its mirror image can never be rotated into each other, only reflected).
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">4</span><h2 class="sec-title">Composing transformations is matrix multiplication — and order matters</h2></div>
+
+To apply transformation `A`, then transformation `B`, to a vector `x`: first `Ax`, then `B(Ax) = (BA)x`. So "`A` then `B`", as a single matrix, is `BA` — read right to left, innermost transformation first. Because matrix multiplication generally isn't commutative, `AB ≠ BA`, composing transformations in a different order genuinely produces a different transformation.
+
+Take `R` = rotate 90° (`[[0, -1], [1, 0]]`) and `S` = scale x by 2 (`[[2, 0], [0, 1]]`), applied to `v = [1, 1]`:
+
+- **Rotate then scale** (`S·R`, rotate happens first): `Rv = [-1, 1]`, then `S(Rv) = [-2, 1]`.
+- **Scale then rotate** (`R·S`, scale happens first): `Sv = [2, 1]`, then `R(Sv) = [-1, 2]`.
+
+Same two operations, same starting vector, two different endpoints — `[-2, 1]` versus `[-1, 2]`. Order isn't a bookkeeping detail here; it's the difference between two distinct transformations that happen to share the same two ingredients.
+
+<Callout label="Where this bites">
+This is exactly why the order of layers in a network, or the order you apply `Q @ Kᵀ` versus `K @ Qᵀ` in attention, isn't arbitrary notation — swapping the order of two matrix operations is a different computation, not a cosmetic rewrite.
+</Callout>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">5</span><h2 class="sec-title">Eigenvectors: the directions a matrix only stretches</h2></div>
+
+For most vectors, a matrix sends them off in a genuinely new direction — rotated, sheared, tangled up with the matrix's other effects. But every square matrix has special directions it leaves alone, up to a scale: nonzero vectors `v` such that `Av = λv` for some scalar `λ`. Along an **eigenvector** `v`, the matrix acts like plain multiplication by its **eigenvalue** `λ` — no rotation, just stretching (or shrinking, or flipping if `λ < 0`).
+
+<Formula name="Eigenvalue equation">
+Av = λv, for some nonzero vector v and scalar λ
+</Formula>
+
+To find them, rewrite as `(A - λI)v = 0`. A nonzero `v` solving this exists only if `A - λI` is singular — `det(A - λI) = 0`, the **characteristic equation**. For a 2×2 matrix with trace `tr(A) = a + d` and determinant `det(A) = ad - bc`, that equation is always a quadratic in `λ`:
+
+```python
+def eigenvalues_2x2(M: list[list[float]]) -> tuple[float, float]:
+    (a, b), (c, d) = M
+    trace, det = a + d, a * d - b * c
+    disc = trace ** 2 - 4 * det          # assumes real eigenvalues (disc >= 0)
+    sqrt_disc = disc ** 0.5
+    return ((trace + sqrt_disc) / 2, (trace - sqrt_disc) / 2)
+
+def eigenvector_2x2(M: list[list[float]], eigenvalue: float) -> list[float]:
+    (a, b), (c, d) = M
+    if b != 0:
+        return [b, eigenvalue - a]      # solves (a-λ)x + by = 0
+    return [eigenvalue - d, c]           # fallback when b == 0
+```
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">6</span><h2 class="sec-title">Where this exact computation shows up: PCA, RNN stability, spectral clustering</h2></div>
+
+Three places you'll meet eigenvalues again, dressed in different clothes:
+
+- **PCA.** Build the covariance matrix of your data, and its eigenvectors are the principal directions — the eigenvector with the largest eigenvalue points along the direction your data varies the most, with the eigenvalue itself equal to how much variance lies along it.
+- **RNN stability.** Applying the same weight matrix once per time step is repeated matrix multiplication, `Aᵗ`. Decompose the input along the matrix's eigenvectors and each component scales by `λᵗ` on its own. If the largest `|λ|` (the **spectral radius**) exceeds 1, that component grows without bound over enough steps — an exploding gradient; if it's below 1, that component decays to nothing — a vanishing gradient. "Keep the spectral radius near 1" is literal design advice for recurrent architectures, not a metaphor.
+- **Spectral clustering.** Build a graph Laplacian from pairwise similarities between points, and its eigenvectors with the smallest eigenvalues give a continuous relaxation of cluster membership — points in the same cluster land close together in that eigenvector's coordinate.
+
+<Callout label="The pattern underneath">
+All three questions reduce to the same one: apply this matrix over and over (or just once, to summarize a whole dataset's spread) — which directions dominate, which vanish, and which stay perfectly still? That question's answer is always an eigendecomposition, however different the surface problem looks.
+</Callout>
+
+</section>
+
+<WorkTask label="Task 1 · Implement" title="Rotation preserves length — verify it, don't just believe it">
+
+Using `rotation_matrix` and `apply` from Section 2, rotate `v = [3, 4]` by `θ = 90°` (`math.pi / 2`). Confirm the rotated vector has the same length as `v`, and confirm `Rᵗ R` comes back to the identity matrix for this `R`.
+
+```python
+v = [3, 4]
+R = rotation_matrix(math.pi / 2)
+
+# TODO: compute apply(R, v), compare its length to v's length
+# TODO: compute transpose(R) @ R by hand or with matmul from Lesson 02, check it's ~identity
+```
+
+<Solution>
+
+```python
+R = [[0.0, -1.0], [1.0, 0.0]]   # rotation_matrix(pi/2), up to floating point
+Rv = apply(R, [3, 4])            # [-4.0, 3.0]
+
+# length check: sqrt(3^2 + 4^2) = 5, sqrt((-4)^2 + 3^2) = 5 — preserved
+
+# R^T R:
+# R^T = [[0, 1], [-1, 0]]
+# R^T @ R = [[0*0 + 1*1, 0*-1 + 1*0], [-1*0 + 0*1, -1*-1 + 0*0]]
+#         = [[1, 0], [0, 1]]   — the identity, confirming R is orthogonal
+```
+
+The rotated vector `[-4, 3]` has the same length as `[3, 4]` and the identity result confirms `R` never stretches anything — it can only reposition points on the same circle they started on.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 2 · Apply" title="Rotate-then-scale vs. scale-then-rotate, confirmed in code">
+
+Reproduce Section 4's example in code: with `R` = rotate 90° and `S` = scale x by 2, apply both compositions to `v = [1, 1]` and confirm they disagree.
+
+```python
+R = [[0, -1], [1, 0]]
+S = [[2, 0], [0, 1]]
+v = [1, 1]
+
+# TODO: compute apply(R, v), then apply(S, that)          -> rotate-then-scale
+# TODO: compute apply(S, v), then apply(R, that)          -> scale-then-rotate
+# TODO: confirm the two results differ
+```
+
+<Solution>
+
+```python
+Rv = apply(R, v)        # [-1, 1]
+rotate_then_scale = apply(S, Rv)   # [-2, 1]
+
+Sv = apply(S, v)        # [2, 1]
+scale_then_rotate = apply(R, Sv)   # [-1, 2]
+
+rotate_then_scale != scale_then_rotate   # [-2, 1] != [-1, 2] — confirmed
+```
+
+Same two matrices, same starting vector, different order, different answer — exactly the non-commutativity Section 4 predicted, not a coincidence of this particular example.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 3 · Implement" title="Eigenvalues and eigenvectors of a symmetric matrix, by hand and in code">
+
+For `M = [[2, 1], [1, 2]]`: find both eigenvalues via the characteristic equation, then the eigenvector for each, then verify `Mv = λv` for one of them.
+
+```python
+M = [[2, 1], [1, 2]]
+
+# TODO: trace(M), det(M), then solve λ^2 - trace*λ + det = 0 by hand
+# TODO: eigenvalues_2x2(M), eigenvector_2x2(M, each eigenvalue)
+# TODO: verify apply(M, v) == eigenvalue * v for one eigenvector
+```
+
+<Solution>
+
+```python
+# trace(M) = 2 + 2 = 4, det(M) = 2*2 - 1*1 = 3
+# characteristic equation: λ^2 - 4λ + 3 = 0  ->  (λ - 1)(λ - 3) = 0  ->  λ = 1 or λ = 3
+
+eigenvalues_2x2(M)          # (3.0, 1.0)
+
+eigenvector_2x2(M, 3)       # [1, 1]   — from (2-3)x + 1y = 0  ->  y = x
+eigenvector_2x2(M, 1)       # [1, -1]  — from (2-1)x + 1y = 0  ->  y = -x
+
+# verify: M @ [1, 1]
+apply(M, [1, 1])            # [3, 3] == 3 * [1, 1]  ✓
+apply(M, [1, -1])           # [1, -1] == 1 * [1, -1]  ✓
+```
+
+Both checks confirm `Mv = λv` exactly: `[1, 1]` only gets stretched by 3, `[1, -1]` is left completely unchanged by 1 — neither one rotates even slightly, which is the whole definition of an eigenvector.
+
+</Solution>
+</WorkTask>
