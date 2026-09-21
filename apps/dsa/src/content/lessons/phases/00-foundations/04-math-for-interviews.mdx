@@ -1,0 +1,253 @@
+---
+title: 'Math for Technical Interviews: <em>The Six Tools That Actually Come Up</em>'
+subtitle: It isn't number theory — it's the small set of arithmetic tools that keep
+  an otherwise-correct solution from breaking on a large or adversarial input.
+summary: 'This lesson gathers six math tools that come up repeatedly in coding interviews:
+  binary exponentiation for computing large powers in O(log n), the modular arithmetic
+  identities and modular inverses needed whenever a problem asks for an answer mod
+  10^9+7, the overflow behavior that differs silently across Python, Java, C++, and
+  Go, the Euclidean algorithm and Sieve of Eratosthenes for GCD/LCM and primality,
+  and the combinatorics and floating-point comparison habits that keep counting and
+  precision problems from producing subtly wrong answers. None of it is number theory
+  for its own sake — each tool exists to stop an otherwise-correct solution from breaking
+  on a large input.'
+phase: 00-foundations
+phaseTitle: Phase 00 — Foundations
+order: 4
+lessonNumber: 4
+pubDate: '2026-09-20'
+hook: The bug in most "math" interview problems isn't the formula — it's the moment
+  an intermediate value silently outgrows the type meant to hold it.
+hookCredit: — the failure mode this entire lesson is built to prevent
+sourceUrl: https://dsa.handbook.academy/curriculum/foundations/math-for-interviews/
+---
+
+import Callout from "@florilex/tutorial-kit/components/Callout.astro";
+import Formula from "@florilex/tutorial-kit/components/Formula.astro";
+import WorkTask from "@florilex/tutorial-kit/components/WorkTask.astro";
+import Solution from "@florilex/tutorial-kit/components/Solution.astro";
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">1</span><h2 class="sec-title">Recognizing when a problem wants math, not code structure</h2></div>
+
+Most interview problems are solved by picking the right data structure or the right traversal. A minority are solved by noticing that the *values* involved — not the shape of the data — are the thing that will break an otherwise-correct solution. Four signals are worth training yourself to notice.
+
+**An exponent or count in the constraints that isn't small.** `1 <= n <= 10^9` in the exponent slot of "compute x^n" rules out a loop that multiplies n times — anything past roughly 10^7 iterations in an interview's time budget needs a sub-linear algorithm, and for exponentiation that means binary exponentiation (Section 2).
+
+**"Return the answer modulo 10^9 + 7" (or any modulus) in the problem statement.** That phrase is the problem telling you the true answer is astronomically large — think counting all permutations of a 10^5-element array — and that you're expected to carry the reduction through every intermediate step, not just the final result (Section 3).
+
+**Bounds that sit right at a fixed-width integer's ceiling.** `-2^31 <= x <= 2^31 - 1`, or repeated multiplication and addition on values already near 10^9, is the constraint block warning that overflow — not the logic — is the actual failure mode being tested (Section 4).
+
+**Counting language: "how many ways," "how many distinct," "choose."** This almost always resolves to permutations or combinations (Section 6), sized in a way brute-force enumeration can't touch, and needing a closed-form formula instead.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">2</span><h2 class="sec-title">Binary exponentiation: computing x^n in O(log n)</h2></div>
+
+Computing `x^n` by multiplying `x` into a running product `n` times is correct but linear: for `n = 10^9`, that's a billion multiplications, far outside any interview time budget. Binary exponentiation gets the same answer in about `log2(n)` multiplications by exploiting the fact that every exponent has a binary representation.
+
+Write `n` in binary as a sum of powers of two: `13 = 0b1101 = 8 + 4 + 1`. Then `x^13 = x^8 * x^4 * x^1`. Each factor is a repeated squaring of the last one — `x^2 = x*x`, `x^4 = (x^2)^2`, `x^8 = (x^4)^2` — so all four needed powers can be produced with only three squarings, and the final answer needs one extra multiply per set bit of `n`.
+
+```python
+def power(x, n):
+    result = 1
+    while n > 0:
+        if n & 1:          # bit is set: fold current x^(2^i) into the answer
+            result *= x
+        x *= x              # x becomes x^(2^(i+1))
+        n >>= 1
+    return result
+```
+
+<Formula name="Binary exponentiation cost">
+Multiplications performed = (bit length of n) + (number of set bits in n) - 1, which is Θ(log n) regardless of how the bits happen to be arranged.
+</Formula>
+
+Hand trace for `power(3, 13)`, with `n = 13 = 0b1101`:
+```text
+n=1101  x=3     result=1        bit set   -> result = 1*3 = 3
+n=0110  x=9     result=3        bit clear
+n=0011  x=81    result=3        bit set   -> result = 3*81 = 243
+n=0001  x=6561  result=243      bit set   -> result = 243*6561 = 1594323
+n=0000  stop.   3^13 = 1594323 ✓
+```
+Four loop iterations for an exponent of 13, instead of thirteen multiplications — and the gap only widens as `n` grows, which is exactly the case the Section 1 constraint bounds are warning about.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">3</span><h2 class="sec-title">Modular arithmetic: three identities and one canonical modulus</h2></div>
+
+When a problem asks for an answer "modulo 10^9 + 7," it's telling you the unreduced answer doesn't fit in any integer type you'd want to carry around — and that you need to reduce after every operation, not just at the end, or you'll overflow before you ever reach the final `% m`.
+
+Three identities make that possible:
+```text
+(a + b) mod m = ((a mod m) + (b mod m)) mod m
+(a * b) mod m = ((a mod m) * (b mod m)) mod m
+(a ^ n) mod m = binary exponentiation (Section 2), reducing mod m after every multiply
+```
+Each holds because modular reduction commutes with addition and multiplication — reducing early never changes the final answer, it only keeps intermediate values small.
+
+**Why `10^9 + 7` specifically.** It's prime, which matters for the modular-inverse trick below, and it's small enough that squaring two already-reduced values (each `< 10^9 + 7`) stays under `(10^9+7)^2 ≈ 10^18`, comfortably inside a 64-bit signed integer (`< 9.2 * 10^18`) — so the multiply never overflows before the `% m` brings it back down.
+
+**Modular combinations.** Section 6 needs `C(n, k) mod p` for huge `n`, which means dividing by `k!` and `(n-k)!` — but division doesn't distribute over `mod` the way addition and multiplication do. The fix, valid whenever `p` is prime and doesn't divide the denominator, is Fermat's Little Theorem: `a^(p-1) ≡ 1 (mod p)`, so `a^(p-2) ≡ a^-1 (mod p)` — the modular inverse of `a` is just `a` raised to `p-2`, computed with the same binary exponentiation from Section 2. Precomputing factorials and their modular inverses up to `n` turns every `C(n, k) mod p` query into three multiplications instead of a division that doesn't exist in modular arithmetic.
+
+<Callout label="Takeaway">
+There is no modular division operator. "Divide by k! mod p" always means "multiply by the modular inverse of k! mod p," and that inverse is only this cheap to compute because p is prime.
+</Callout>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">4</span><h2 class="sec-title">Integer overflow: silent in some languages, undefined in others</h2></div>
+
+The same arithmetic expression fails differently depending on the language it's written in, which is exactly why overflow bugs slip past a code review that only checks the logic.
+
+| Language | What happens on overflow |
+|---|---|
+| Python | Nothing — integers are arbitrary-precision, there's no ceiling to hit |
+| Java | Silent wraparound to the fixed-width two's-complement value; `Math.addExact`/`multiplyExact` throw instead if you need detection |
+| C++ | Undefined behavior for signed overflow specifically — the compiler is permitted to assume it never happens, which can eliminate the very overflow check you wrote |
+| Go | Silent two's-complement wraparound, same as Java, with no built-in checked-arithmetic helpers |
+
+Two traps come up repeatedly regardless of language.
+
+**Negating the minimum value.** In a 32-bit signed range, the minimum value is `-2^31`, but the maximum is only `2^31 - 1` — the positive side is one short. So `-(-2^31)` would need to be `2^31`, which doesn't fit; the negation itself overflows. The fix is to widen to a 64-bit type *before* negating (`long m = n;` in Java, `int64(n)` in Go), not after.
+
+**Guarding before the operation, not after.** An overflow check only works if it runs before the operation that would overflow, using inequalities that can't themselves overflow. Building a number digit by digit, the wrong guard is `result = result * 10 + digit; if (result > INT_MAX) ...` — by then the overflow already happened and the value is garbage. The right guard checks first: `if (result > (INT_MAX - digit) / 10) return OVERFLOW;` before ever computing `result * 10 + digit`.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">5</span><h2 class="sec-title">GCD, LCM, and the Sieve of Eratosthenes</h2></div>
+
+Three number-theory routines come up often enough to memorize outright rather than re-derive under time pressure.
+
+**Euclidean algorithm (GCD).** The key fact: `gcd(a, b) = gcd(b, a mod b)`, because any common divisor of `a` and `b` also divides `a mod b`, and vice versa. That collapses to three lines:
+```python
+def gcd(a, b):
+    while b:
+        a, b = b, a % b
+    return a
+```
+The loop runs in `O(log(min(a, b)))` — the worst case, slowest to converge, happens on consecutive Fibonacci numbers, which is Lamé's theorem.
+
+**LCM, computed in the order that avoids overflow.** The identity `lcm(a, b) * gcd(a, b) = a * b` suggests `lcm(a, b) = a * b / gcd(a, b)`, but computing `a * b` first risks overflowing before the division ever happens, even though the *final* answer would have fit. Since `gcd(a, b)` always divides `a` evenly, reordering to `(a / gcd(a, b)) * b` divides down to a smaller number first and never touches the oversized intermediate product.
+
+**Sieve of Eratosthenes, for "how many primes below n."** Trial-dividing each number up to `n` is `O(n * sqrt(n))`; the sieve does it in `O(n log log n)` by marking composites instead of testing primality directly.
+```python
+def sieve(n):
+    is_prime = [True] * (n + 1)
+    is_prime[0] = is_prime[1] = False
+    for i in range(2, int(n**0.5) + 1):
+        if is_prime[i]:
+            for j in range(i * i, n + 1, i):
+                is_prime[j] = False
+    return is_prime
+```
+Two details make it fast rather than merely correct: the outer loop stops at `sqrt(n)`, because any composite `<= n` has a prime factor `<= sqrt(n)`; and the inner loop starts at `i * i` rather than `2 * i`, because every smaller multiple of `i` was already marked composite by a smaller prime factor. One more overflow trap rides along with that second optimization: once `i` exceeds roughly `sqrt(INT_MAX)` (~46,340 for 32-bit), computing `i * i` directly can overflow before the comparison `i * i <= n` even runs — widening to a 64-bit comparison avoids it.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">6</span><h2 class="sec-title">Combinatorics, and comparing floating-point results honestly</h2></div>
+
+Two more tools round out the interview math toolbox, and they share a theme: know exactly which representation you're computing in, because the naive version overflows or misleads.
+
+**Permutations and combinations.** `n!` grows so fast that `21!` already exceeds a 64-bit signed integer's range — safe to precompute directly only up to `n <= 20`. `C(n, k) = n! / (k! * (n-k)!)` counts unordered choices, but computing it as three separate factorials wastes range; the product form
+```text
+C(n, k) = (n * (n-1) * ... * (n-k+1)) / k!
+```
+divides as it goes, keeping intermediate values proportional to `C(n,k)` itself rather than to `n!`. For `C(n, k) mod p` with huge `n`, use the precomputed-factorial-plus-modular-inverse approach from Section 3 instead — that's the version that actually appears once counts get combinatorially large.
+
+**Floating-point results need an epsilon, never `==`.** Binary floating point can't represent most decimal fractions exactly (`0.1 + 0.2 != 0.3` in IEEE 754), so any interview problem returning a computed `float`/`double` should be checked with `abs(got - want) < 1e-5` rather than direct equality — that's also the tolerance most judges, LeetCode included, build into their graders. When a problem actually needs exact decimal precision — financial calculations, for instance — the right fix isn't a smaller epsilon, it's switching representations entirely: `Decimal` in Python, `BigDecimal` in Java, or an arbitrary-precision library in C++.
+
+</section>
+
+<WorkTask label="Task 1 · Implement" title="Modular exponentiation">
+
+Implement `modpow(x, n, mod)` that computes `x^n mod m` using the binary exponentiation loop from Section 2, reducing modulo `mod` after every multiplication (Section 3) so intermediate values never grow past roughly `mod^2`. Then trace it by hand for `modpow(2, 10, 1000)` — write out the loop state on each iteration — and confirm it matches `2^10 mod 1000 = 24`.
+
+<Solution>
+
+```python
+def modpow(x, n, mod):
+    result = 1
+    x %= mod
+    while n > 0:
+        if n & 1:
+            result = (result * x) % mod
+        x = (x * x) % mod
+        n >>= 1
+    return result
+```
+
+Hand trace for `modpow(2, 10, 1000)`, with `n = 10 = 0b1010`:
+```text
+n=1010  x=2     result=1     bit clear
+n=0101  x=4     result=1     bit set   -> result = (1*4) % 1000 = 4
+n=0010  x=16    result=4     bit clear
+n=0001  x=256   result=4     bit set   -> result = (4*256) % 1000 = 1024 % 1000 = 24
+n=0000  stop.   modpow(2, 10, 1000) = 24
+```
+Check directly: `2^10 = 1024`, and `1024 mod 1000 = 24` — matches. The reduction after every multiply is what keeps `x` and `result` bounded by `mod` at every step, instead of letting `x` grow to `2^1024`-scale before a single final `% mod` at the end.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 2 · Trace" title="GCD, then LCM the safe way">
+
+Trace the Euclidean algorithm from Section 5 by hand to compute `gcd(1071, 462)`, writing out `(a, b)` at each step. Then compute `lcm(1071, 462)` using the overflow-safe order `(a / gcd(a, b)) * b`, and explain in one sentence why computing `(a * b) / gcd(a, b)` in that order would have been riskier even though it produces the same final number.
+
+<Solution>
+
+Trace:
+```text
+a=1071, b=462  ->  1071 mod 462 = 147   (1071 = 2*462 + 147)
+a=462,  b=147  ->  462 mod 147  = 21    (462 = 3*147 + 21)
+a=147,  b=21   ->  147 mod 21   = 0     (147 = 7*21 + 0)
+b=0, stop.  gcd(1071, 462) = 21
+```
+`lcm(1071, 462) = (1071 / 21) * 462 = 51 * 462 = 23562`.
+
+**Why the order matters:** dividing first shrinks `1071` down to `51` before the multiply ever happens, so the largest intermediate value produced is `23562`, the answer itself. Multiplying first would compute `1071 * 462 = 494802` before ever dividing — harmless for these particular small numbers, but for two values near the top of a 32-bit range, that raw product can overflow even though the true LCM, after dividing by the GCD, would have fit comfortably.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 3 · Debug" title="Find the bug in each snippet">
+
+Each snippet below is meant to do what its comment says, but has a bug from this lesson. Identify the bug and fix it.
+
+```python
+# (a) Meant to: detect overflow while building a number digit by digit (32-bit signed range)
+def append_digit(result, digit):
+    result = result * 10 + digit
+    if result > 2**31 - 1:
+        raise OverflowError
+    return result
+```
+
+```python
+# (b) Meant to: compute lcm(a, b) for two positive 32-bit ints without overflowing a 64-bit accumulator
+def lcm(a, b):
+    return (a * b) // gcd(a, b)
+```
+
+```python
+# (c) Meant to: check whether a computed float result matches an expected value
+def matches(got, want):
+    return got == want
+```
+
+<Solution>
+
+**(a) Guard runs after the overflow, not before.** By the time `result > 2**31 - 1` is checked, `result * 10 + digit` has already been computed and, in a fixed-width language, already overflowed — the check inspects garbage. Fix: check before the multiply, e.g. `if result > (2**31 - 1 - digit) // 10: raise OverflowError`, evaluated before computing the new `result`. (Python's own ints won't actually wrap since they're arbitrary-precision, but the guard as written doesn't catch what it claims to, and the same code in Java or C++ would silently corrupt `result`.)
+
+**(b) Multiplying before dividing.** `a * b` is computed in full before the division by `gcd(a, b)` ever happens, so even though the true LCM is small enough to fit, the intermediate product can overflow a fixed-width accumulator for large `a` and `b`. Fix: divide first — `return (a // gcd(a, b)) * b` — since `gcd(a, b)` always divides `a` evenly, so the division is exact.
+
+**(c) Direct float equality.** IEEE 754 floating point can't represent most decimal values exactly, so two mathematically equal results computed via different paths can differ in their last bit and fail `==` even when "correct." Fix: compare with a tolerance, `return abs(got - want) < 1e-5`.
+
+</Solution>
+</WorkTask>
