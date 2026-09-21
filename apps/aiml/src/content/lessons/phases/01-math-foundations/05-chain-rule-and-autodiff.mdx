@@ -1,0 +1,236 @@
+---
+title: 'Chain Rule and Automatic Differentiation: <em>One Backward Pass, Every Gradient</em>'
+subtitle: The chain rule from calculus and a graph of primitive operations are all
+  it takes to compute the gradient of a million-parameter loss function in roughly
+  the cost of one forward pass.
+summary: 'This lesson builds the chain rule into automatic differentiation: how nested
+  functions compose their derivatives by multiplication, why neither hand-derived
+  closed forms nor numerical finite differences scale to millions of parameters, how
+  any expression decomposes into a computational graph of primitive operations with
+  known local derivatives, and how reverse-mode autodiff (backpropagation) walks that
+  graph once, backward, to compute every parameter''s gradient simultaneously. It
+  closes by building a minimal autograd engine — a Value class with operator overloading,
+  local backward closures, and a topological sort — the same design pattern underneath
+  PyTorch, TensorFlow, and JAX.'
+phase: 01-math-foundations
+phaseTitle: Phase 01 — Math Foundations
+order: 5
+lessonNumber: 5
+pubDate: '2026-09-20'
+hook: Backpropagation is not a separate algorithm from the chain rule — it is the
+  chain rule, applied once per edge of a graph, in exactly the order that lets every
+  gradient's contributions finish arriving before it's needed.
+hookCredit: — the one-sentence version of everything this lesson builds toward
+sourceUrl: https://aiengineeringfromscratch.com/lesson?path=phases%2F01-math-foundations%2F05-chain-rule-and-autodiff
+---
+
+import Callout from "@florilex/tutorial-kit/components/Callout.astro";
+import Formula from "@florilex/tutorial-kit/components/Formula.astro";
+import WorkTask from "@florilex/tutorial-kit/components/WorkTask.astro";
+import Solution from "@florilex/tutorial-kit/components/Solution.astro";
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">1</span><h2 class="sec-title">The chain rule: multiplying derivatives along a path</h2></div>
+
+If `y = f(g(x))`, the chain rule says the derivative of the whole composition is the product of the derivatives along the way: `dy/dx = dy/du · du/dx`, where `u = g(x)` is the intermediate value. In words — multiply the derivatives along the chain from `x` up to `y`.
+
+Take `y = sigmoid(w·x + b)`, the exact shape of a single neuron's output. Let `u = w·x + b` (the inner, linear piece) and `y = sigmoid(u)` (the outer, nonlinear piece). Each piece's derivative is something the previous lesson already derived: `du/dx = w` (the linear term's own derivative), and `dy/du = σ'(u) = σ(u)·(1 − σ(u))` (the sigmoid derivative). The chain rule says `dy/dx = σ(u)·(1 − σ(u))·w` — nothing new needed beyond multiplying two already-known pieces together.
+
+With `w = 2, x = 3, b = -1`: `u = 2·3 - 1 = 5`, `σ(5) ≈ 0.9933`, so `dy/du ≈ 0.9933 · 0.0067 ≈ 0.00665`, and `dy/dx ≈ 0.00665 · 2 ≈ 0.0133`. Each factor was cheap on its own; the chain rule is just the bookkeeping that combines them correctly.
+
+**One extension matters for everything that follows:** when an intermediate value feeds into more than one downstream path — the same weight used in two different terms of a larger expression, say — the contributions from each path **add**. If `x` reaches `y` through two routes, `dy/dx` is the sum of what each route contributes on its own, not just one of them. This is the multivariable chain rule, and it's the single rule the rest of this lesson is built around; skip it and a graph with any branching computes the wrong gradient.
+
+<Callout label="Callback">
+The previous lesson noted that sigmoid's derivative and cross-entropy's derivative "partially cancel into one clean expression" when combined. That cancellation *is* the chain rule from this section, run through two specific functions instead of an abstract `f` and `g` — nothing more mysterious than multiplying `∂L/∂ŷ` by `dŷ/du` and watching the algebra simplify.
+</Callout>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">2</span><h2 class="sec-title">Why neither hand derivatives nor finite differences scale to a real network</h2></div>
+
+A real network composes hundreds of primitive operations — matrix multiplies, additions, activations, a loss function — across potentially millions of parameters. Writing out one closed-form symbolic derivative per weight, the way Section 1's linear-regression derivation did for `w` and `b`, is a dead end here: the closed form for one weight buried eight layers deep is a product of eight-plus chained local derivatives unique to its specific path through the graph, and there are millions of such weights, each with its own path.
+
+The previous lesson's numerical differentiation doesn't scale here either, for a different reason. Computing `∂L/∂wᵢ` numerically means perturbing `wᵢ` by a small `h`, rerunning the *entire* forward pass, and dividing the change in loss by `h` — and that has to be repeated separately for every single parameter, since perturbing one weight tells you nothing about any other weight's gradient. For `n` parameters, that's `n` full forward passes just to get one gradient vector — for a network with a million weights, a million forward passes per training step, which is why the previous lesson called numerical differentiation "a debugging tool, not how production training code computes gradients."
+
+What's actually needed: a way to compute the *exact* gradient with respect to every parameter simultaneously, in roughly the cost of a single forward pass, not one pass per parameter. That's what automatic differentiation (autodiff) provides, and Sections 3-4 build up how.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">3</span><h2 class="sec-title">Computational graphs: decomposing any expression into primitives with known local derivatives</h2></div>
+
+The trick that makes autodiff possible is a change of perspective: instead of trying to write down one global closed-form derivative for a huge expression, decompose the expression into a graph of **primitive operations** — addition, multiplication, `exp`, and a handful of others — each of which has a trivially simple, always-the-same local derivative: `∂/∂a(a + b) = 1`, `∂/∂a(a·b) = b`, `∂/∂a(exp(a)) = exp(a)`, and so on.
+
+Take `L = (sigmoid(w·x + b) − y_true)²`, the squared-error loss for one neuron's prediction. It decomposes into a chain of nodes:
+```text
+u1 = w * x
+u2 = u1 + b
+u3 = sigmoid(u2)
+u4 = u3 - y_true
+L  = u4 ** 2
+```
+Each line is one primitive operation with one or two inputs and one output, and each has a local derivative that requires knowing nothing about any other line — `∂u1/∂w = x`, `∂u2/∂u1 = 1`, `∂u3/∂u2 = σ(u2)(1 − σ(u2))`, `∂u4/∂u3 = 1`, `∂L/∂u4 = 2·u4`. None of these local derivatives depend on how deep in a larger network this fragment happens to sit.
+
+This is the shift that makes the rest of the lesson possible: autodiff never needs a human (or a symbolic algebra system) to derive one global expression for `∂L/∂w`. It only ever needs the local derivative rule for each primitive — a fixed, small library of rules — plus the chain rule from Section 1 to stitch them together automatically, for a graph of any size or shape.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">4</span><h2 class="sec-title">Reverse-mode autodiff: one backward pass, every gradient</h2></div>
+
+Given the graph from Section 3, **reverse-mode autodiff** — the algorithm neural networks call **backpropagation** — computes every gradient in two passes.
+
+The **forward pass** evaluates every node in the graph in order, from inputs to output, storing each node's numeric value exactly as ordinary code execution would.
+
+The **backward pass** starts at the output and walks the graph in reverse. It initializes the output's own gradient with respect to itself as `1` (`dL/dL = 1`), then visits every node in reverse topological order — never visiting a node until every node that consumes its output has already been visited. At each node, it takes the gradient that has arrived from downstream and multiplies it by that node's local derivative (from Section 3) to get the gradient with respect to each of its own inputs, then hands that product further upstream. When a node's output feeds more than one downstream consumer, the gradients arriving back from each consumer are **summed** — this is exactly Section 1's multivariable chain rule, now applied mechanically at every branching point in the graph rather than reasoned through by hand.
+
+<Formula name="Reverse-mode cost">
+One backward pass computes the gradient of a single output with respect to *every* node in the graph — all million weights at once — in time proportional to the number of edges in the graph: roughly the same cost as one forward pass, not one pass per parameter.
+</Formula>
+
+That cost profile is exactly backward from **forward-mode autodiff**, the other classical option: forward-mode propagates a derivative *alongside* each value as the forward pass runs, but only tracks the derivative with respect to one chosen input at a time — getting the gradient with respect to every input requires one full pass per input. Forward-mode is the better choice when a function has few inputs and many outputs; reverse-mode is the better choice when a function has many inputs and few outputs. A neural network's loss is the extreme version of the second case — millions of weight inputs, one scalar loss output — which is precisely why reverse-mode, not forward-mode, is the algorithm inside PyTorch, TensorFlow, and JAX's autograd engines.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">5</span><h2 class="sec-title">Building a minimal autograd engine: the Value class</h2></div>
+
+The ideas from Sections 3-4 turn directly into code with one design: wrap every number in the graph in a `Value` object that carries its numeric data, an accumulated gradient (starting at `0`), the set of `Value`s that produced it, and a small closure — `_backward` — that knows how to route a gradient arriving from downstream into its own inputs' gradients, using exactly the local derivative rules from Section 3.
+
+```python
+class Value:
+    def __init__(self, data, _children=()):
+        self.data = data
+        self.grad = 0.0
+        self._prev = set(_children)
+        self._backward = lambda: None   # no-op for leaf values (inputs, weights)
+
+    def __add__(self, other):
+        other = other if isinstance(other, Value) else Value(other)
+        out = Value(self.data + other.data, (self, other))
+        def _backward():
+            self.grad += out.grad       # local derivative of a+b w.r.t. a is 1
+            other.grad += out.grad      # local derivative of a+b w.r.t. b is 1
+        out._backward = _backward
+        return out
+
+    def __mul__(self, other):
+        other = other if isinstance(other, Value) else Value(other)
+        out = Value(self.data * other.data, (self, other))
+        def _backward():
+            self.grad += other.data * out.grad   # d(a*b)/da = b
+            other.grad += self.data * out.grad   # d(a*b)/db = a
+        out._backward = _backward
+        return out
+
+    def backward(self):
+        topo, visited = [], set()
+        def build(v):
+            if v not in visited:
+                visited.add(v)
+                for child in v._prev:
+                    build(child)
+                topo.append(v)          # a node is appended only after all its children
+        build(self)
+        self.grad = 1.0                 # dL/dL = 1, the seed for the whole backward pass
+        for v in reversed(topo):        # reverse of "children before parents" = output first
+            v._backward()
+```
+
+Three things do all the work. **Operator overloading** (`__add__`, `__mul__`) means writing ordinary-looking Python (`a * b + c`) silently builds the computational graph from Section 3 as a side effect of just evaluating the expression once. **Each `_backward` closure** hard-codes exactly one primitive's local derivative rule — `+=`, not `=`, is what implements Section 1's "gradients from multiple paths sum" rule, since a `Value` used twice will have `_backward` called once per use, each call adding its own contribution. **The topological sort** inside `backward()` is what guarantees the reverse-order requirement from Section 4: a node's `_backward` never runs until every downstream node that depends on it has already contributed its share of the gradient, so nothing is ever read before it's fully written.
+
+</section>
+
+<WorkTask label="Task 1 · Implement" title="Chain rule by hand, checked numerically">
+
+For `y = sigmoid(w·x + b)` with `w = 2, x = 3, b = -1`, compute `dy/dw` by hand using the chain rule from Section 1 (holding `x` and `b` fixed, differentiating with respect to `w` this time instead of `x`). Then verify your answer using `numerical_derivative` (central finite difference) on `f(w) = sigmoid(w·3 - 1)` at `w = 2`.
+
+<Solution>
+
+**By hand:** `u = w·x + b = 2·3 - 1 = 5`. `y = σ(5) ≈ 0.993307`.
+
+`dy/du = σ(5)·(1 − σ(5)) ≈ 0.993307 · 0.006693 ≈ 0.006648`
+
+`du/dw = x = 3` (the local derivative of `w·x + b` with respect to `w`, holding `x` fixed)
+
+`dy/dw = dy/du · du/dw ≈ 0.006648 · 3 ≈ 0.019944`
+
+**Numerical check:**
+```python
+import math
+
+def sigmoid(x):
+    return 1 / (1 + math.exp(-x))
+
+def numerical_derivative(f, x, h=1e-5):
+    return (f(x + h) - f(x - h)) / (2 * h)
+
+f = lambda w: sigmoid(w * 3 - 1)
+print(numerical_derivative(f, 2))
+# ≈ 0.019944
+```
+The numerical result matches the hand-computed chain-rule result to well beyond 4 decimal places, confirming that multiplying the two local derivatives (`dy/du` and `du/dw`) really does produce the correct end-to-end derivative.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 2 · Implement" title="Build the Value autograd engine">
+
+Using the `Value` class from Section 5, compute the gradient of `L = (a * b) * (a + c)` with respect to `a`, `b`, and `c`, for `a = 2, b = -3, c = 10`. Print `L.data` and each of `a.grad`, `b.grad`, `c.grad` after calling `L.backward()`.
+
+<Solution>
+
+```python
+a = Value(2)
+b = Value(-3)
+c = Value(10)
+
+d = a * b        # d = -6
+e = a + c        # e = 12
+L = d * e         # L = -72
+
+L.backward()
+
+print(L.data)     # -72
+print(a.grad)     # -42
+print(b.grad)     # 24
+print(c.grad)     # -6
+```
+Running this against the class from Section 5 reproduces exactly the values derived by hand in Task 3 — `a.grad = -42`, `b.grad = 24`, `c.grad = -6` — because `a` is used in two places (`d = a*b` and `e = a+c`), and the `+=` inside each `_backward` closure sums both contributions automatically, with no special-casing needed for the fact that `a` happens to appear twice.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 3 · Trace" title="Hand-trace the forward and backward pass through a branching graph">
+
+For the same expression as Task 2 — `L = (a * b) * (a + c)`, with `a = 2, b = -3, c = 10` — trace the forward pass to compute the value at every node (`d = a*b`, `e = a+c`, `L = d*e`), then trace the backward pass by hand: compute `dL/dd`, `dL/de`, then use the chain rule to get `dL/da` through *each* of the two paths `a` participates in (`a → d → L` and `a → e → L`) separately, and show that summing them gives the same `a.grad` Task 2's code produced. Explain in one sentence why picking only one of the two paths would give a wrong answer.
+
+<Solution>
+
+**Forward pass:**
+```text
+d = a * b = 2 * (-3)  = -6
+e = a + c = 2 + 10    = 12
+L = d * e = -6 * 12   = -72
+```
+
+**Backward pass, starting from `dL/dL = 1`:**
+```text
+dL/dd = e = 12        (local derivative of d*e w.r.t. d)
+dL/de = d = -6        (local derivative of d*e w.r.t. e)
+```
+Now propagate to `a`, `b`, `c` through their respective local derivatives:
+```text
+dd/da = b = -3   ->  path a->d->L contributes  dL/dd * dd/da = 12 * (-3) = -36
+de/da = 1        ->  path a->e->L contributes  dL/de * de/da = -6 * 1   = -6
+
+dd/db = a = 2    ->  dL/db = dL/dd * dd/db = 12 * 2 = 24
+de/dc = 1        ->  dL/dc = dL/de * de/dc = -6 * 1 = -6
+```
+Summing `a`'s two path contributions: `dL/da = -36 + (-6) = -42`, matching `a.grad` from Task 2 exactly. `b.grad = 24` and `c.grad = -6` each only had one path to sum, since `b` and `c` each appear in exactly one place in the expression.
+
+**Why both paths must be summed:** `a` genuinely influences `L` twice — once by changing `d` and once by changing `e` — and a small nudge to `a` moves `L` by the combined effect of both changes simultaneously, not by whichever single path happens to be picked; dropping either path would silently discard part of `a`'s real effect on the loss, which is exactly the multivariable chain rule from Section 1 that the `Value` class's `+=` was built to enforce automatically.
+
+</Solution>
+</WorkTask>

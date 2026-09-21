@@ -1,0 +1,239 @@
+---
+title: 'Data Structures for Systems: <em>Six Structures, Six Failure Modes They Fix</em>'
+subtitle: Hash tables, B-trees, LSM-trees, Bloom filters, skip lists, and consistent
+  hashing aren't competing options — each one exists because the structure before
+  it broke under a specific kind of load.
+summary: 'This lesson covers the six data structures underneath most storage and caching
+  systems: hash tables and the ordering they trade away, B-trees and the write amplification
+  of in-place page updates, LSM-trees and how they turn random writes into sequential
+  ones at the cost of background compaction, Bloom filters as a near-free way to rule
+  out absent keys, skip lists as a randomized alternative to balanced-tree rebalancing,
+  and consistent hashing as the fix for hash tables'' worst behavior under cluster
+  membership changes. It closes by showing how a real system like RocksDB stacks several
+  of them together, each one solving the specific failure mode of the layer beneath
+  it.'
+phase: 02-data-structures-for-systems
+phaseTitle: Phase 02 — Data Structures for Systems
+order: 3
+lessonNumber: 1
+pubDate: '2026-09-20'
+hook: A hash table, a B-tree, and an LSM-tree all answer "where do I put this key"
+  — they just disagree about whether reading, writing, or staying sorted gets to be
+  cheap, and a real storage engine picks by deliberately giving up exactly one of
+  the three.
+hookCredit: — why no single data structure in this lesson is simply "the best one"
+sourceUrl: https://hld.handbook.academy/curriculum/prerequisites/data-structures-for-systems/
+---
+
+import Callout from "@florilex/tutorial-kit/components/Callout.astro";
+import Formula from "@florilex/tutorial-kit/components/Formula.astro";
+import WorkTask from "@florilex/tutorial-kit/components/WorkTask.astro";
+import Solution from "@florilex/tutorial-kit/components/Solution.astro";
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">1</span><h2 class="sec-title">Hash tables: O(1) lookups, bought by giving up on order</h2></div>
+
+A hash table maps a key to a bucket by hashing it, then resolves collisions — two keys landing in the same bucket — either by chaining (each bucket holds a small list) or open addressing (probe to a different bucket according to a fixed rule). Once the ratio of stored items to bucket count (the load factor) crosses roughly 0.75, the table rehashes into a larger array to keep lookups close to O(1); without that resize, chains grow long and every operation degrades toward O(n).
+
+The complexity story is O(1) average-case for get/put, O(n) worst-case — the worst case shows up when a hash function collides badly, either by bad luck or by an adversary crafting inputs that all hash to the same bucket, which is why production hash tables seed their hash function randomly per process rather than using a fixed seed.
+
+The limitation that matters more than the worst case in practice: **a hash table destroys ordering.** There is no way to ask "give me all keys between X and Y" without scanning every entry, because a good hash function scatters adjacent keys to unrelated buckets on purpose — that scattering is exactly what makes lookups fast, and it's fundamentally incompatible with keeping keys near their neighbors. Section 2 exists because some workloads need that range query.
+
+Hash tables show up as in-memory caches (Redis, Memcached), as database hash indexes (PostgreSQL, InnoDB's adaptive hash index) for pure equality lookups, and as the routing layer for sharding — `hash(key) % N` picks which of N shards owns a key. That routing use is a hash table's least stable job: Section 6 covers exactly why, and what replaces the modulus.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">2</span><h2 class="sec-title">B-trees: in-place, page-shaped, and built for range scans</h2></div>
+
+A B-tree is a balanced tree where each node is sized to match a disk page — 8 KB in PostgreSQL, 16 KB in InnoDB — and holds hundreds of keys and child pointers rather than the two or three a binary tree would. That huge branching factor is the whole point: with a few hundred keys per page, a tree holding billions of rows stays only 3-4 levels deep, so both reads and writes cost roughly `log_b(n)` disk seeks, where `b` is in the hundreds rather than 2 — a logarithm so shallow it barely grows as data scales up.
+
+<Formula name="Why B-tree depth barely grows">
+Height ≈ log_b(n), where the branching factor b (keys per page) is in the hundreds — doubling n adds a fraction of one extra level, not one.
+</Formula>
+
+Updates happen **in place**: modifying one key rewrites the whole page it lives on, sending the updated page back to disk even if only a few bytes changed — a source of write amplification that has no equivalent in Section 1's hash table, but which buys something a hash table can't offer at all. Because keys stay physically sorted within and across pages, a B-tree answers `WHERE created_at BETWEEN a AND b` by walking straight to the starting leaf and reading forward — no full scan required, and no separate index structure needed for the range case.
+
+That tradeoff — pay a write-time cost to keep data sorted, in exchange for cheap ordered reads — is why B-trees are the default choice for read-heavy OLTP workloads with range scans (PostgreSQL and MySQL/InnoDB both use them as the primary index structure), and why Section 3 exists for the opposite case: workloads where writes dominate and paying that in-place cost on every single write is the actual bottleneck.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">3</span><h2 class="sec-title">LSM-trees: deferring the write cost B-trees pay immediately</h2></div>
+
+An LSM-tree (log-structured merge-tree) makes the opposite bet from a B-tree: instead of finding the right page and rewriting it in place, every write goes to a write-ahead log (for durability) and an in-memory sorted structure called a **memtable** — commonly a skip list, covered in Section 5, because a skip list supports fast sorted inserts without the rebalancing a balanced tree would need. Once the memtable fills, it flushes to disk as an immutable, sorted **SSTable** (Sorted String Table); a background process called **compaction** continuously merges smaller SSTables into larger ones, typically across levels where each level is roughly 10x the size of the one above it.
+
+Writes become effectively O(1) amortized, because appending to a log and an in-memory structure never requires seeking to a specific location on disk the way a B-tree's in-place update does — this is the direct data-structure analog of the group-commit trick from the OS essentials lesson: batch the expensive part (here, merging and rewriting sorted data) and pay it later in the background instead of on every individual operation. The cost deferred this way is real, not eliminated: production LSM-trees typically see **10-30x write amplification**, because the same piece of data gets rewritten repeatedly as it's merged down through level after level during compaction.
+
+Reads pay the mirror cost: a key might live in the memtable, or in any of several SSTables across levels, so a naive read could mean checking every one of them. Section 4's Bloom filters are what make this tractable in practice — every SSTable carries one, letting a read skip touching disk entirely for any SSTable that provably doesn't contain the key.
+
+<Callout label="Takeaway">
+A B-tree pays its write cost immediately and in place; an LSM-tree defers and batches that same cost into background compaction. Neither number goes away — choosing between them is choosing *when* the cost gets paid, based on whether your workload is read-heavy or write-heavy.
+</Callout>
+
+This is why LSM-trees are the standard choice for write-heavy and time-series workloads: RocksDB, Cassandra, and ScyllaDB are all LSM-based, and the pattern shows up at real scale — Discord's migration from 177 Cassandra nodes to 72 ScyllaDB nodes (both LSM-based, but with a more efficient implementation) cut read p99 latency from 125 ms to 15 ms while using well under half the hardware.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">4</span><h2 class="sec-title">Bloom filters: proving absence for almost nothing</h2></div>
+
+A Bloom filter is a bit array of size `m`, paired with `k` independent hash functions. Inserting a key sets the `k` bit positions its hashes point to; querying a key checks those same `k` positions. If **any** of them is `0`, the key is **definitely** absent — no bit-setting operation could have skipped it. If all `k` are `1`, the key is **probably** present, but might not be: two other keys could have collectively set exactly those bits without either one being the queried key. That's the entire trade: a Bloom filter can produce false positives, at a rate you choose, but it can **never** produce a false negative.
+
+The sizing is a direct formula given the number of items `n` and a target false-positive rate `p`:
+```text
+m = -n * ln(p) / (ln 2)^2     # bits needed
+k = (m / n) * ln 2            # hash functions needed
+```
+At a 1% false-positive rate, this works out to about 9.6 bits per item with 7 hash functions — RocksDB's default of 10 bits per key is close to that, and stores a filter for 1 million keys in roughly 1.2 MB, versus roughly 8 MB to actually hold those keys in a hash set. The filter never stores the keys themselves, only a fixed-size fingerprint of the fact that they exist — which is exactly why it's so much smaller than any structure that has to answer "which key" rather than just "which key, maybe."
+
+One sharp limitation: **a Bloom filter can't support deletion.** Clearing a bit because one key no longer exists might silently break the "definitely absent" guarantee for a different key whose fingerprint happens to share that bit. Workloads that need deletion use a Counting Bloom Filter (each slot is a small counter instead of one bit, at roughly 4x the space) or a Cuckoo filter instead.
+
+The use case that ties directly back to Section 3: an LSM-tree read that might otherwise have to check every SSTable across every level instead skips any SSTable whose Bloom filter says "definitely not here" — turning an O(number of SSTables) disk-touching operation into a handful of cheap in-memory bit checks plus one real lookup.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">5</span><h2 class="sec-title">Skip lists: O(log n) by flipping coins instead of rebalancing</h2></div>
+
+A skip list is a sorted linked list with extra "express lane" layers stacked on top of the base list. Each node is assigned a random height when it's inserted — commonly by flipping a biased coin per level and stopping the first time it comes up tails — so higher levels contain exponentially fewer nodes than the one below them. A search starts at the top level, moves forward as long as the next node's key is still less than the target, and drops down a level whenever it would overshoot; the express lanes let it skip past large stretches of the list instead of walking it node by node.
+
+Expected search, insert, and delete are all O(log n), for the same reason a balanced tree is: each level roughly halves the number of nodes left to consider (or divides by whatever base the coin's bias implies). Redis's implementation, backing sorted sets, uses a promotion probability (`ZSKIPLIST_P`) of `1/4` and a maximum of 64 levels, and stores a per-node **span** — how many base-list nodes a given forward pointer skips over — which turns rank queries like `ZRANK` into the same kind of express-lane walk instead of a linear count.
+
+The practical edge a skip list has over a balanced tree like a red-black tree or AVL tree isn't the complexity — both are O(log n) — it's **what happens on insert and delete**. A balanced tree's rebalancing can touch a swath of the tree in one operation (rotations that ripple upward); a skip list's insert only sets a few forward pointers at the new node's randomly chosen levels, touching a small, localized set of nodes. That locality is exactly why LSM-trees (Section 3) commonly choose a skip list for the in-memory memtable: writes need to land in a sorted structure quickly and without a rebalancing operation that could stall or serialize concurrent inserts.
+
+<Callout label="Careful" variant="warn">
+Skip lists are *expected* O(log n), not worst-case guaranteed — an unlucky run of coin flips could in principle produce a lopsided structure. In practice this is a non-issue at any real scale (the probability collapses exponentially), but it's the one guarantee a balanced tree gives that a skip list technically doesn't.
+</Callout>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">6</span><h2 class="sec-title">Consistent hashing: fixing what happens to a hash table when N changes</h2></div>
+
+Section 1 flagged sharding by `hash(key) % N` as a hash table's least stable job, and here's precisely why: when `N` changes — a server is added or removed — nearly every key's `hash(key) % N` result changes too, because the modulus itself changed, not just one server's share of the keyspace. Removing one server out of four can remap the majority of keys to a *different* server than before, which for a cache means the equivalent of nearly every entry missing at once — a stampede of requests hitting the origin simultaneously.
+
+Consistent hashing fixes this by changing what "which server owns this key" means. Both servers and keys are hashed onto the same fixed ring, conventionally `0` to `2^32 - 1`; each key is owned by the next server clockwise from its position on the ring. Adding or removing a server only changes ownership for the keys between that server and its nearest neighbor on the ring — everyone else's owner is untouched, because their nearest clockwise server never moved. Removing one server out of `N` remaps roughly `1/N` of all keys, not nearly all of them.
+
+A ring with only one point per physical server has an uneven-load problem: an unlucky hash placement can give one server a disproportionately large arc of the ring. The standard fix is **virtual nodes** — each physical server is placed at 100-300 points around the ring instead of one, which both smooths load distribution across servers and makes rebalancing more incremental, since a single physical server's departure now redistributes its keys across many neighbors instead of dumping them all on one.
+
+This is the mechanism underneath Dynamo-style databases, distributed caches, and Kafka's partition assignment — DynamoDB, whose consistent-hashing design traces directly back to the original 2007 Dynamo paper, peaked at 151 million requests per second with single-digit-millisecond latency on Prime Day 2025, still resting on the same ring-and-virtual-nodes idea at that scale.
+
+None of these six structures actually compete with each other — they compose. RocksDB is the clean example: writes land in a skip-list memtable (Section 5), flush to sorted, immutable SSTables (Section 3), each SSTable carries a Bloom filter to skip levels that can't contain a queried key (Section 4), and the whole engine is typically fronted by a consistent-hashed shard router (this section) so that adding capacity doesn't reshuffle the whole cluster's data. Each layer exists to fix the specific failure mode of the layer beneath it, not to replace it.
+
+</section>
+
+<WorkTask label="Task 1 · Implement" title="Size and reason about a Bloom filter">
+
+Using the formulas from Section 4, compute the bit-array size `m` and number of hash functions `k` for a Bloom filter holding `n = 1,000,000` items at a target false-positive rate of `p = 0.01`. Then implement `insert(item)` and `might_contain(item)` using `k` hash functions simulated via double hashing: `hash_i(x) = h1(x) + i * h2(x)` for `i` in `0..k-1`. Finally: after building the filter, you query a key that was never inserted and get `True` back. Is this a bug? What is the one guarantee this same filter can never violate in the *other* direction?
+
+<Solution>
+
+**Sizing:**
+```text
+m = -n * ln(p) / (ln 2)^2
+  = -1,000,000 * ln(0.01) / (ln 2)^2
+  = 1,000,000 * 4.605 / 0.4805
+  ≈ 9,585,000 bits  ≈ 1.15 MB   (≈9.6 bits/item — matches Section 4's figure)
+
+k = (m / n) * ln 2
+  = 9.585 * 0.693
+  ≈ 6.6  ->  round to 7 hash functions (matches the "7 hash functions" cited in Section 4)
+```
+
+```python
+import hashlib
+
+class BloomFilter:
+    def __init__(self, m, k):
+        self.m = m
+        self.k = k
+        self.bits = bytearray((m + 7) // 8)
+
+    def _positions(self, item):
+        h1 = int(hashlib.sha1(item.encode()).hexdigest(), 16)
+        h2 = int(hashlib.md5(item.encode()).hexdigest(), 16)
+        return [(h1 + i * h2) % self.m for i in range(self.k)]
+
+    def _set_bit(self, pos):
+        self.bits[pos // 8] |= (1 << (pos % 8))
+
+    def _get_bit(self, pos):
+        return (self.bits[pos // 8] >> (pos % 8)) & 1
+
+    def insert(self, item):
+        for pos in self._positions(item):
+            self._set_bit(pos)
+
+    def might_contain(self, item):
+        return all(self._get_bit(pos) for pos in self._positions(item))
+```
+
+**Not a bug.** A `True` result for a never-inserted key is an expected false positive at the tuned ~1% rate — it means every one of that key's `k` bit positions happened to already be set by *other* inserted keys' insertions, purely by coincidence of hashing. The filter never claimed otherwise; "probably present" is the documented meaning of `True`.
+
+**The guarantee that can never be violated:** a `False` result is always correct. `insert` only ever sets bits, never clears them, so if even one of a key's `k` positions is still `0`, no insertion could have set all of them, which means that key was never inserted — a Bloom filter can have false positives, but never a false negative.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 2 · Trace" title="Count remapped keys: consistent hashing vs. naive mod-N">
+
+A ring runs from `0` to `255`. Four servers sit at positions `S1=20`, `S2=90`, `S3=160`, `S4=230`. Six keys hash to positions `k1=5, k2=50, k3=110, k4=140, k5=200, k6=250`; each key is owned by the next server clockwise (wrapping past 255 back to 0). (a) Determine each key's owner, then remove `S3` and determine how many keys change owners. (b) Separately, for 8 keys with IDs `0` through `7` sharded by `id % N`, list the owner index for each id under `N=4` and again under `N=3`, and count how many ids get a *different* owner index when N drops from 4 to 3 — even though conceptually only one server left.
+
+<Solution>
+
+**(a) Consistent hashing, before removing S3:**
+```text
+k1=5   -> next server >= 5   is S1(20)   owner S1
+k2=50  -> next server >= 50  is S2(90)   owner S2
+k3=110 -> next server >= 110 is S3(160)  owner S3
+k4=140 -> next server >= 140 is S3(160)  owner S3
+k5=200 -> next server >= 200 is S4(230)  owner S4
+k6=250 -> wraps past 255 to  S1(20)      owner S1
+```
+After removing S3, remaining servers are S1=20, S2=90, S4=230:
+```text
+k1 -> S1 (unchanged)
+k2 -> S2 (unchanged)
+k3 -> next server >= 110 is now S4(230)  MOVED (was S3)
+k4 -> next server >= 140 is now S4(230)  MOVED (was S3)
+k5 -> S4 (unchanged — already owned by S4)
+k6 -> S1 (unchanged)
+```
+Only the 2 keys that S3 used to own (`k3`, `k4`) move, and they move to S3's clockwise neighbor, S4 — exactly the "only ~1/N of keys move" property from Section 6. 4 of 6 keys never noticed the server left.
+
+**(b) Naive mod-N:**
+```text
+id:        0  1  2  3  4  5  6  7
+id % 4:    0  1  2  3  0  1  2  3
+id % 3:    0  1  2  0  1  2  0  1
+```
+Comparing owner index position by position: ids `0, 1, 2` happen to keep the same index in both rows, but ids `3, 4, 5, 6, 7` (5 of 8 keys — 62.5%) get a different index entirely, purely because the modulus changed from 4 to 3. Every key's assignment depends on the *total* server count, not on which specific server left, so removing one server out of four reshuffles the majority of keys — the exact stampede scenario consistent hashing exists to avoid.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 3 · Classify" title="Pick the right structure for each workload">
+
+For each scenario, name the single best-fitting structure from this lesson and justify it against at least one alternative:
+
+(a) A time-series metrics store ingesting millions of writes per second, where old data is rarely updated and queries mostly ask for a time window.
+(b) An in-memory API rate-limiter that needs an O(1) exact check of "have we seen this API key," with no ordering or range queries required.
+(c) A CDN edge node that, before making an expensive origin-server request, wants to know whether a URL has *definitely* never been requested before — using as little memory as possible.
+(d) A distributed cache cluster that must keep working as nodes are added or removed for scaling, without invalidating most of the cache on every change.
+(e) A relational database's primary index, supporting `WHERE created_at BETWEEN a AND b` range scans, for a read-heavy workload where write latency is a secondary concern.
+
+<Solution>
+
+**(a) LSM-tree (Section 3).** Millions of writes/sec is squarely the write-heavy case an LSM-tree is built for — sequential appends to a memtable and WAL instead of in-place page rewrites — and time-series ingestion is the canonical example cited for exactly this structure.
+
+**(b) A plain hash table (Section 1).** Only an exact-match lookup is needed, with no ordering or range requirement, which is precisely what a hash table is optimized for; consistent hashing (Section 6) solves a different problem — routing across multiple *nodes* — and doesn't apply to a single in-memory table on one host.
+
+**(c) A Bloom filter (Section 4).** "Definitely never requested" with minimal memory is the exact guarantee a Bloom filter gives (no false negatives, ever) at a fraction of the memory a real set of URLs would need — it's the textbook "pre-filter before an expensive lookup" use case.
+
+**(d) Consistent hashing (Section 6).** The requirement is precisely its defining property: node membership changes remap only about `1/N` of keys, instead of the near-total reshuffle that naive `hash(key) % N` produces (Task 2b), which is what keeps most of the cache valid across a scaling event.
+
+**(e) A B-tree (Section 2).** Read-heavy with a range-scan requirement is the case B-trees are built for — in-place updates keep keys physically sorted, so a range scan walks forward from one leaf instead of touching the whole table, which is also why PostgreSQL and MySQL/InnoDB both use B-trees as their actual primary index structure.
+
+</Solution>
+</WorkTask>
