@@ -4,9 +4,11 @@ interface Props {
 }
 const { active } = Astro.props;
 
+// "go" is intentionally left out of this list — it's still a draft with no
+// real lessons, so it isn't deployed or linked from any other series' nav.
+// It stays a valid `active` value so apps/go's own layout still type-checks.
 const links = [
   { id: "aiml", label: "AIML", href: "/aiml/" },
-  { id: "go", label: "Go", href: "/go/" },
   { id: "dsa", label: "DSA", href: "/dsa/" },
   { id: "system-design", label: "System Design", href: "/system-design/" },
 ] as const;

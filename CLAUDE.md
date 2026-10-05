@@ -21,13 +21,16 @@ florilex/
     lesson-pipeline/  URL -> LLM -> new lesson .mdx (see scripts/lesson-pipeline/README.md)
 ```
 
-Each app under `apps/*` builds to fully static HTML/CSS/JS (`astro build`, `output: "static"`). Because each is built with `base` set to its own mount path (`/aiml`, `/go` in `astro.config.mjs`), every internal link and asset URL it generates is already prefixed with that path. `scripts/deploy/deploy-firebase.sh` assembles all of them into one `site/` directory before deploying:
+Each app under `apps/*` builds to fully static HTML/CSS/JS (`astro build`, `output: "static"`). Because each is built with `base` set to its own mount path (`/aiml`, `/go` in `astro.config.mjs`), every internal link and asset URL it generates is already prefixed with that path. `scripts/deploy/deploy-firebase.sh` assembles the deployed apps into one `site/` directory before deploying:
 
 ```
-site/index.html   <- hub/index.html          (served at /)
-site/aiml/...     <- apps/aiml/dist          (served at /aiml/...)
-site/go/...       <- apps/go/dist            (served at /go/...)
+site/index.html         <- hub/index.html          (served at /)
+site/aiml/...           <- apps/aiml/dist          (served at /aiml/...)
+site/dsa/...            <- apps/dsa/dist           (served at /dsa/...)
+site/system-design/...  <- apps/system-design/dist (served at /system-design/...)
 ```
+
+`apps/go` is currently excluded from this assembly — it's still a draft with no real lessons, so it stays in the repo and buildable locally (`pnpm build:go` / `pnpm dev:go`), but isn't deployed or linked from the hub or the shared `Nav` until it has real content.
 
 Since `base` already makes every generated link/asset path-correct, no runtime rewriting or proxying is needed — the whole thing is one static Firebase Hosting deployment. The shared nav bar (linking between series) is a `Nav.astro` component from `@florilex/tutorial-kit`, rendered at build time into each app's layout/index pages — not injected at request time.
 

@@ -1,23 +1,25 @@
 #!/usr/bin/env bash
-# Builds every app and assembles them into ./site, then deploys that
+# Builds the deployed apps and assembles them into ./site, then deploys that
 # directory to Firebase Hosting as a single static site:
 #   site/index.html          <- hub/index.html (landing page linking to each series)
 #   site/aiml/...            <- apps/aiml/dist (already emits /aiml/-prefixed links)
-#   site/go/...              <- apps/go/dist   (already emits /go/-prefixed links)
 #   site/dsa/...             <- apps/dsa/dist  (already emits /dsa/-prefixed links)
 #   site/system-design/...   <- apps/system-design/dist (already emits /system-design/-prefixed links)
+#
+# apps/go is intentionally excluded here — it's still a draft with no real
+# lessons, so it stays in the repo and buildable via `pnpm build:go` /
+# `pnpm dev:go`, but isn't deployed or linked from the hub until it's ready.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
-pnpm build
+pnpm --filter @florilex/aiml --filter @florilex/dsa --filter @florilex/system-design build
 
 rm -rf site
 mkdir -p site
 cp -r hub/. site/
-mkdir -p site/aiml site/go site/dsa site/system-design
+mkdir -p site/aiml site/dsa site/system-design
 cp -r apps/aiml/dist/. site/aiml/
-cp -r apps/go/dist/. site/go/
 cp -r apps/dsa/dist/. site/dsa/
 cp -r apps/system-design/dist/. site/system-design/
 
