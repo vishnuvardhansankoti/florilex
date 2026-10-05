@@ -1,0 +1,218 @@
+---
+title: 'Arrays: <em>One Buffer, Three Patterns</em>'
+subtitle: Every other data structure eventually bottoms out in a flat, indexed buffer
+  — knowing exactly what that buffer buys you, and what it doesn't, is where algorithm
+  design starts.
+summary: 'This lesson explains why arrays deliver O(1) random access through contiguous
+  memory and address arithmetic, and how that same layout extends to multi-dimensional
+  arrays via row-major order. It covers the doubling strategy behind dynamic arrays,
+  then walks through three canonical in-place array techniques: back-merge, two-pointer
+  compaction, and three-reverse rotation. It closes with the information-theoretic
+  floor on in-place rearrangement and when a linked list actually beats an array.'
+phase: 01-linear-data-structures
+phaseTitle: Phase 01 — Linear Data Structures
+order: 5
+lessonNumber: 1
+pubDate: '2026-09-23'
+hook: 'An array is not really a container. It''s a promise: give me an index, and
+  I''ll give you an address, in one instruction.'
+hookCredit: — the arithmetic underneath every a[i]
+sourceUrl: https://dsa.handbook.academy/curriculum/linear-data-structures/arrays/
+---
+
+import Callout from "@florilex/tutorial-kit/components/Callout.astro";
+import Formula from "@florilex/tutorial-kit/components/Formula.astro";
+import WorkTask from "@florilex/tutorial-kit/components/WorkTask.astro";
+import Solution from "@florilex/tutorial-kit/components/Solution.astro";
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">1</span><h2 class="sec-title">The contiguous buffer</h2></div>
+
+An array is, physically, nothing more than a fixed-length run of equal-sized slots sitting back-to-back in memory. That single fact — contiguous, equal-sized — is the entire reason arrays feel "fast" compared to almost anything else you'll build. If you know where the buffer starts (`base`) and how big each element is (`sizeof(elem)`), you never have to search for element `i`. You compute its address directly.
+
+<Formula name="Array address arithmetic">
+address(i) = base + i × sizeof(elem)
+</Formula>
+
+That's a multiply and an add — one instruction on real hardware, not a traversal. Compare this to a linked list, where finding element `i` means following `i` pointers one at a time, each one a potential cache miss. The array's speed isn't an implementation detail some engineer optimized; it's a direct consequence of the layout guaranteeing every element's position is a formula, not a search.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">2</span><h2 class="sec-title">Row-major layout: the same trick in two dimensions</h2></div>
+
+Nothing about "contiguous buffer" requires the array to be conceptually one-dimensional — a matrix is still, underneath, one flat run of memory; the rows and columns are a fiction the address formula maintains for you. Given an `m × n` matrix stored row-major (each row laid out in full before the next one begins), element `(i, j)` lives at:
+
+<Formula name="Row-major 2D address">
+address(i, j) = base + (i × n + j) × sizeof(elem)
+</Formula>
+
+`i × n` skips past `i` complete rows, and `+ j` walks to the right column within the current row. This is why iterating a 2D array row-by-row is dramatically faster than column-by-column in most languages: row-major order means adjacent-`j` accesses are also adjacent in memory, so the CPU's cache prefetcher does most of the work for you. Walking column-by-column jumps `n` slots on every step, defeating the cache almost entirely — same algorithm, same complexity class, very different wall-clock time.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">3</span><h2 class="sec-title">Static vs. dynamic: paying for growth in advance or on demand</h2></div>
+
+A *static* array's length is fixed the moment it's allocated — the contiguous-buffer guarantee only holds because the buffer never has to move. A *dynamic* array (Python's `list`, Java's `ArrayList`, Go's slice) fakes resizability on top of that same fixed-buffer primitive: it over-allocates, and when an append arrives with no room left, it allocates a new, larger buffer and copies everything over.
+
+The usual strategy doubles capacity on overflow rather than growing by a fixed amount, which is what turns an occasionally-expensive `O(n)` copy into an amortized `O(1)` append — the full derivation of why doubling (and not, say, adding a constant each time) is what makes the amortized cost constant lives in the amortized-analysis section of the Big-O lesson. What matters here is the consequence for correctness, not just speed: a reference to "the buffer" held before a resize can become stale after one, which is why appending to a dynamic array while holding an old pointer or an aliased slice is a real bug category in languages that expose the underlying buffer directly — Go slices are the sharpest example, since two slices can silently alias the same backing array right up until one of them resizes out from under the other.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">4</span><h2 class="sec-title">Back-merge: writing from the back to protect unread data</h2></div>
+
+Merging two *sorted* arrays in place is the first place naive array code breaks in a specific, informative way. Say array `a` has room at the end for array `b`'s elements too (length `m + n`, only the first `m` slots filled) and you want the result sorted in `a`. Writing forward — smallest-to-smallest, left-to-right — overwrites slots in `a` you haven't read from yet, corrupting the input mid-merge.
+
+The fix is to merge from the *back*. Point one index at the last real element of `a`, one at the last element of `b`, and one at the very last slot of the combined buffer. Repeatedly place the larger of the two candidates into the destination slot and step that source pointer (and the destination) backward. Because you're writing into slots that are either already-copied-from or still empty, you never destroy data you still need.
+
+```python
+def merge_in_place(a: list[int], m: int, b: list[int], n: int) -> None:
+    i, j, dest = m - 1, n - 1, m + n - 1
+    while j >= 0:
+        if i >= 0 and a[i] > b[j]:
+            a[dest] = a[i]
+            i -= 1
+        else:
+            a[dest] = b[j]
+            j -= 1
+        dest -= 1
+```
+
+Notice the loop only has to check `j >= 0` — once `b` is exhausted, whatever's left at the front of `a` is already in the right place and already sorted, so there's nothing left to move.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">5</span><h2 class="sec-title">Two-pointer compaction: read fast, write slow</h2></div>
+
+A different problem, a different discipline: given an array, remove every element matching some predicate, in place, keeping the survivors in their original relative order, and report the new length. There's no "extra space" to grow into here — every slot has to keep doing its job.
+
+The pattern is two pointers moving at different speeds. A *read* pointer scans every position, one at a time, no exceptions. A *write* pointer only advances when the read pointer lands on a value worth keeping — and when it does, that value gets copied down to the write pointer's slot. Because the write pointer never moves faster than the read pointer, it's always looking at a slot the read pointer has already passed (or the same slot), so it's safe to overwrite.
+
+```python
+def compact(nums: list[int], remove_value: int) -> int:
+    write = 0
+    for read in range(len(nums)):
+        if nums[read] != remove_value:
+            nums[write] = nums[read]
+            write += 1
+    return write  # new logical length
+```
+
+The return value matters as much as the mutation: `write` *is* the new length, and it's also the count of "real" elements now sitting at the front of `nums`. Everything from index `write` onward is leftover garbage — still technically in the array, but outside the logical bounds the caller should look at. This exact skeleton, with the branch condition swapped out, is also "remove duplicates from a sorted array" (keep only the first occurrence) and "move zeroes to the end" (write non-zero survivors, then fill the tail with zeroes) — same pointers, same discipline, different keep condition.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">6</span><h2 class="sec-title">Three-reverse rotation, and the floor under all of it</h2></div>
+
+Rotating an array right by `k` — the last `k` elements wrap around to the front — has an unhelpfully tempting naive solution: shift everything right by one, `k` times. That's `O(n·k)`, slow enough to time out once `k` and `n` are both large.
+
+The `O(n)`-time, `O(1)`-extra-space trick reframes rotation as three reversals: reverse the whole array, then reverse the first `k` elements in place, then reverse the remaining `n − k`. Each reversal alone scrambles the order; the specific sequence of three un-scrambles it back into a rotation.
+
+```python
+def rotate_right(nums: list[int], k: int) -> None:
+    n = len(nums)
+    k %= n  # k can exceed n; without this, the second reverse runs out of bounds
+    nums.reverse()
+    nums[:k] = reversed(nums[:k])
+    nums[k:] = reversed(nums[k:])
+```
+
+The `k %= n` line is load-bearing, not defensive boilerplate: a rotation by `k = n` is a full rotation back to the start (a no-op), and constraints that allow `k` up to, say, `10^5` on an array of the same size all but guarantee you'll be handed a `k` larger than `n` at some point.
+
+Zoom out, and every technique in this lesson is chasing the same floor. Rearranging `n` values in place can't beat `Ω(n)` time — every element that ends up somewhere different than where it started has to be touched by some write, and there are up to `n` such elements. Back-merge, compaction, and three-reverse rotation all land on `O(n)`, which means none of them is leaving performance on the table; they're already at the theoretical limit, just reaching it without the `O(n)` (or worse) *extra space* a more naive approach would need.
+
+That efficiency is also exactly where arrays stop being the right tool. Splicing a large block into the *middle* of a huge array still means shifting every element after the insertion point — a linked list does the same splice in `O(1)` once you're holding the right node, because there's no contiguity to maintain. Arrays win on lookup, iteration, and cache-friendliness; linked lists win when the shape of the data changes more often than it gets indexed into.
+
+</section>
+
+<WorkTask label="Task 1 · Implement" title="Merge two sorted arrays in place">
+
+You're given array `a` with length `m + n`, where only the first `m` slots hold real (sorted ascending) values and the rest are placeholder space, and a separate sorted array `b` of length `n`. Merge `b` into `a` so that `a` ends up fully sorted ascending, using no extra array — you may only use a constant number of extra variables. Target `O(m + n)` time.
+
+```python
+def merge_in_place(a: list[int], m: int, b: list[int], n: int) -> None:
+    # a has length m + n; only a[:m] holds real values, the rest is empty space
+    ...
+```
+
+<Solution>
+
+Merge from the back, exactly as in Section 4 — the only way to avoid overwriting unread values in `a` without a second array.
+
+```python
+def merge_in_place(a: list[int], m: int, b: list[int], n: int) -> None:
+    i, j, dest = m - 1, n - 1, m + n - 1
+    while j >= 0:
+        if i >= 0 and a[i] > b[j]:
+            a[dest] = a[i]
+            i -= 1
+        else:
+            a[dest] = b[j]
+            j -= 1
+        dest -= 1
+```
+
+The loop condition only checks `j >= 0`, not `i >= 0` — if `b` runs out first, whatever remains at the front of `a` is already sorted and already in place, so there's nothing left to do. If `a`'s real values run out first (`i` hits `-1`), the `if` branch's `i >= 0` check simply forces every remaining step to take the `b[j]` branch, copying the rest of `b` down.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 2 · Implement" title="Move all zeroes to the end, in place">
+
+Given an integer array `nums`, move every `0` to the end while preserving the relative order of the non-zero elements — in place, `O(n)` time, `O(1)` extra space.
+
+```python
+def move_zeroes(nums: list[int]) -> None:
+    ...
+```
+
+<Solution>
+
+This is two-pointer compaction (Section 5) with the keep condition `!= 0`, followed by filling the tail with zeroes:
+
+```python
+def move_zeroes(nums: list[int]) -> None:
+    write = 0
+    for read in range(len(nums)):
+        if nums[read] != 0:
+            nums[write] = nums[read]
+            write += 1
+    for i in range(write, len(nums)):
+        nums[i] = 0
+```
+
+The first loop is the same read/write skeleton as `compact` — it packs every non-zero value leftward in its original relative order, and `write` ends up as the count of non-zero survivors. The second loop just backfills everything from `write` onward with zeroes, since compaction alone leaves stale duplicate values sitting past the write pointer rather than actual zeroes.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 3 · Implement" title="Rotate an array left by k steps">
+
+Given an array `nums` and a non-negative integer `k`, rotate `nums` to the *left* by `k` steps, in place, `O(n)` time, `O(1)` extra space. `k` may be larger than `len(nums)`.
+
+```python
+def rotate_left(nums: list[int], k: int) -> None:
+    ...
+```
+
+<Solution>
+
+Left rotation is the mirror image of Section 6's right rotation: reverse the first `k` elements, reverse the remaining `n - k`, then reverse the whole array.
+
+```python
+def rotate_left(nums: list[int], k: int) -> None:
+    n = len(nums)
+    k %= n
+    nums[:k] = reversed(nums[:k])
+    nums[k:] = reversed(nums[k:])
+    nums.reverse()
+```
+
+Same `k %= n` normalization, same reasoning as the right-rotation case — the only difference is which pieces get reversed first. Reversing the two halves independently first, then the whole array, walks each element to a position exactly `k` slots earlier (wrapping around), which is what "rotate left by `k`" means.
+
+</Solution>
+</WorkTask>

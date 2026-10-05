@@ -1,0 +1,230 @@
+---
+title: 'Probability and Distributions: <em>The Language a Model Uses to Say How Sure
+  It Is</em>'
+subtitle: Every prediction a model makes is secretly a probability distribution, and
+  every loss function is secretly measuring how far that distribution sits from the
+  true one — this lesson builds both halves of that sentence from the axioms up.
+summary: 'This lesson builds probability from its three axioms up through PMFs and
+  PDFs, then covers five distributions a working ML engineer keeps reaching for: Bernoulli
+  and categorical for classification, Poisson and uniform for counts and priors, and
+  the normal distribution explained through the Central Limit Theorem. It covers expected
+  value and variance as the two numbers that summarize any distribution, including
+  how a loss averaged over a batch is literally a Monte Carlo estimate of an expectation.
+  It closes by deriving softmax and log-softmax from the categorical distribution,
+  the log-sum-exp trick that keeps them numerically stable, and how cross-entropy
+  from logits is exactly the negative log-likelihood this lesson has been building
+  toward the whole time.'
+phase: 01-math-foundations
+phaseTitle: Phase 01 — Math Foundations
+order: 6
+lessonNumber: 6
+pubDate: '2026-09-23'
+hook: A neural network's last layer doesn't output an answer. It outputs a distribution,
+  and "the answer" is just the number you get from asking that distribution where
+  it puts the most weight.
+hookCredit: — why softmax, not argmax, is the actual output of a classifier
+sourceUrl: https://aiengineeringfromscratch.com/lesson?path=phases%2F01-math-foundations%2F06-probability-and-distributions
+---
+
+import Callout from "@florilex/tutorial-kit/components/Callout.astro";
+import Formula from "@florilex/tutorial-kit/components/Formula.astro";
+import WorkTask from "@florilex/tutorial-kit/components/WorkTask.astro";
+import Solution from "@florilex/tutorial-kit/components/Solution.astro";
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">1</span><h2 class="sec-title">Three axioms, and the difference between a PMF and a PDF</h2></div>
+
+Probability theory rests on three axioms, and nearly everything downstream in this lesson is one of them showing up again in a different costume:
+
+1. `P(A) ≥ 0` for any event `A` — no negative probabilities.
+2. `P(S) = 1` — something in the sample space always happens.
+3. `P(A or B) = P(A) + P(B)` whenever `A` and `B` can't both occur (mutually exclusive events).
+
+For a **discrete** random variable — the outcome of a die roll, which of `K` classes an image belongs to, which word comes next in a sentence — the full description is a **probability mass function (PMF)**: `P(X = k)` directly is a probability, one number per possible outcome, and Axiom 2 becomes the concrete requirement `Σₖ P(X = k) = 1`.
+
+For a **continuous** random variable — a pixel intensity, a sensor reading, a model's internal activation value — there's no way to assign nonzero probability to any single exact value, since there are infinitely many of them; a **probability density function (PDF)** `f(x)` instead gives *density*, and Axiom 2 becomes `∫ f(x) dx = 1` over the whole range. The number you actually care about — the probability `X` falls in some range `[a, b]` — is the area under `f` between `a` and `b`, not `f(x)` itself; `f(x)` alone can be larger than 1 without violating anything, since it's a density, not a probability.
+
+<Callout label="Careful" variant="warn">
+It's tempting to read a PDF's height at a point the same way you'd read a PMF's value at a point — don't. `P(X = 2.0)` for a continuous variable is exactly `0` no matter how tall `f(2.0)` is; only an interval around `2.0` has nonzero probability. This distinction resurfaces directly in Section 6: softmax outputs are a PMF over a finite set of classes, which is exactly why they're allowed to be read as "the probability of this class" in a way a raw density value never could be.
+</Callout>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">2</span><h2 class="sec-title">Bernoulli and categorical: modeling a single discrete choice</h2></div>
+
+The **Bernoulli distribution** is the single coin flip: `P(X = 1) = p`, `P(X = 0) = 1 - p`, one parameter, two outcomes. It's not an abstraction picked for this lesson — it's exactly what a binary classifier's sigmoid output already *is*. The earlier calculus lesson's binary cross-entropy loss, `L = -[y·log(ŷ) + (1-y)·log(1-ŷ)]`, wasn't an arbitrary formula; `ŷ` is the parameter `p` of a Bernoulli distribution over the true label, and that loss is exactly `-log P(y)` under that distribution — a fact Section 5 makes precise.
+
+The **categorical distribution** is a Bernoulli generalized from two outcomes to `K`: a set of probabilities `p₁, ..., p_K`, one per class, satisfying `Σₖ p_k = 1` (Axiom 2 again) and each `p_k ≥ 0` (Axiom 1 again). This is the object an image classifier or a language model is actually producing — not "the answer," but a full distribution over all `K` classes or all 50,000+ vocabulary words, with the eventual prediction just being whichever outcome that distribution puts the most weight on. Its PMF is `P(X = k) = p_k`, about as simple as a PMF gets — all the interesting machinery is in *how* a neural network is made to output a valid set of `p_k`'s in the first place, which is exactly what Section 6's softmax exists to guarantee.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">3</span><h2 class="sec-title">Poisson and uniform: counting events, and admitting you have no information</h2></div>
+
+The **Poisson distribution** models a count: how many times something happens in a fixed window, given an average rate `λ`. Its PMF is `P(X = k) = λᵏ · e^{-λ} / k!` for `k = 0, 1, 2, ...`, and both its mean and its variance equal `λ` — the same single parameter controls both where the distribution centers and how spread out it is. This shows up anywhere you're modeling discrete event counts with a known average rate and no reason to expect clustering or avoidance between events: requests arriving at a server in a one-second window, typos in a page of text, tokens of a rare class appearing in a batch.
+
+The **uniform distribution** is the opposite kind of statement — not "here's what I expect," but "I have no reason to prefer any outcome over any other within this range." The continuous version `U(a, b)` has constant density `f(x) = 1/(b-a)` for `x` in `[a, b]` and `0` outside it; every sub-interval of equal width has equal probability, by construction. This is precisely the assumption behind uniform weight initialization schemes (drawing each initial weight from some `U(-r, r)`): before a single gradient update has happened, there's no principled reason to prefer one initial weight value over another within the chosen range, so the distribution that encodes exactly that — and nothing more — is uniform.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">4</span><h2 class="sec-title">The normal distribution and the Central Limit Theorem: why Gaussian is everywhere</h2></div>
+
+The normal (Gaussian) distribution's density is
+
+<Formula name="Normal PDF">
+f(x) = (1 / (σ√(2π))) · exp(−(x − μ)² / (2σ²))
+</Formula>
+
+parameterized by just a mean `μ` and a variance `σ²` — a single peak, symmetric, controlled entirely by where it's centered and how spread out it is. The reason it shows up constantly in ML, rather than by convenience, is the **Central Limit Theorem (CLT)**: the sum (or average) of many independent random variables — *regardless of what distribution each individual variable follows* — converges toward a normal distribution as the number of variables grows, as long as each one contributes a small, bounded share of the total. This is a statement about *sums*, not about any individual variable needing to already look Gaussian.
+
+That's precisely why Gaussian noise, not some other shape, is the standard choice for so much of ML: a weight's activation, once it's the sum of many independent input contributions each multiplied by a small weight, is a CLT setup almost by definition, which is part of why activations across a wide layer tend to look roughly Gaussian even when no one designed them to. It's also why Gaussian noise specifically (not uniform, not Poisson) is what diffusion models add and remove — a Gaussian is **closed under addition**: the sum of two independent Gaussians is itself exactly Gaussian, with variances adding directly. That single algebraic fact is what lets a diffusion model's forward process jump straight from a clean image to its noised version at any arbitrary timestep with one closed-form formula, instead of having to simulate every intermediate noising step one at a time.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">5</span><h2 class="sec-title">Expected value and variance: the two numbers a distribution reduces to</h2></div>
+
+**Expected value** is a probability-weighted average — a distribution's center of mass. For a discrete variable, `E[X] = Σₖ k · P(X = k)`; for a continuous one, `E[X] = ∫ x · f(x) dx`. It has one property that does an enormous amount of work throughout ML: **linearity**, `E[aX + b] = a·E[X] + b`, and more generally `E[X + Y] = E[X] + E[Y]` — true regardless of whether `X` and `Y` are independent, which is what makes it safe to reason about sums and averages of complicated, correlated quantities without first working out their joint distribution.
+
+**Variance**, `Var(X) = E[(X − E[X])²] = E[X²] − E[X]²`, measures spread around that center. It's the quantity weight-initialization schemes (Xavier, He) are actually tuned around: choosing the variance of the initial weight distribution specifically so that the variance of activations neither shrinks toward zero nor explodes as it passes through many layers — a direct, practical use of Section 4's observation that a layer's pre-activation is a sum of many independent terms, and controlling the variance of the pieces controls the variance of the sum.
+
+The connection that ties this lesson to every previous one: **a loss function averaged over a training batch is a Monte Carlo estimate of an expectation.** The true objective is `E_{x,y ~ data}[loss(model(x), y)]` — an expectation over the entire, unknown true data distribution, which can never be computed exactly. Averaging the loss over a finite batch of samples drawn from that distribution is exactly how you estimate an expectation you can't compute directly: draw samples, average, and the estimate converges to the true expectation as the batch (or the number of batches seen) grows — the same logic behind every "average the loss over the batch" line of training code.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">6</span><h2 class="sec-title">Softmax, log-softmax, and cross-entropy from logits</h2></div>
+
+A neural network's final layer produces `K` raw, unconstrained real numbers — **logits** — that don't sum to `1` and can be negative. **Softmax** turns them into a valid categorical distribution (Section 2), satisfying both of probability's basic requirements at once:
+
+<Formula name="Softmax">
+softmax(z)ᵢ = exp(zᵢ) / Σⱼ exp(zⱼ)
+</Formula>
+
+The exponential guarantees every output is positive (Axiom 1); dividing by the sum over all `K` classes guarantees they sum to exactly `1` (Axiom 2). Both constraints, satisfied by construction, for any real-valued input.
+
+Computed naively, this breaks in floating point almost immediately: a single logit of `1000` sends `exp(1000)` to `inf`, and `inf / inf` comes back `nan` — a completely valid-looking model producing garbage from one large-but-plausible logit. The fix is the **log-sum-exp trick**: subtract the maximum logit from every logit before exponentiating. Because `exp(zᵢ - m) / Σⱼ exp(zⱼ - m)` is mathematically identical to the original softmax for any constant `m` (the `exp(-m)` factor cancels between numerator and denominator), choosing `m = max(z)` guarantees the largest exponent computed is `exp(0) = 1` and every other term is `≤ 1` — no overflow possible, ever, for any input.
+
+`log_softmax(z)ᵢ = zᵢ - m - log(Σⱼ exp(zⱼ - m))` computes the *log* of the softmax directly, rather than taking `log()` of an already-computed softmax output — which matters because a correctly-computed probability can still legitimately be a very small float (`1e-30`, say) whose logarithm loses precision or underflows to `-inf` if computed as a separate second step. Computing it in one fused expression instead keeps every intermediate value in a numerically safe range.
+
+This closes the loop the whole lesson has been building toward: **cross-entropy loss from logits is exactly `-log_softmax(z)` at the true class index** — the negative log-probability the categorical distribution (Section 2), parameterized by this network's own logits, assigns to the correct answer. That's precisely the negative log-likelihood, and averaging it over a batch (Section 5) is the Monte Carlo estimate of the true expected negative log-likelihood the model is being trained to minimize. The binary cross-entropy from the earlier calculus lesson is the `K = 2` special case of exactly this same object.
+
+</section>
+
+<WorkTask label="Task 1 · Implement" title="A numerically stable softmax, log-softmax, and cross-entropy">
+
+Implement four functions from scratch using only NumPy:
+
+```python
+import numpy as np
+
+def naive_softmax(logits: np.ndarray) -> np.ndarray:
+    ...  # exp then normalize, no shift
+
+def stable_softmax(logits: np.ndarray) -> np.ndarray:
+    ...  # subtract max(logits) first
+
+def log_softmax(logits: np.ndarray) -> np.ndarray:
+    ...  # compute log(softmax(logits)) directly, in one fused expression
+
+def cross_entropy_from_logits(logits: np.ndarray, true_class: int) -> float:
+    ...  # -log_softmax(logits)[true_class]
+```
+
+Then run both softmax versions on `logits = np.array([1000.0, 1.0, 1.0])` and report what each one returns. Explain in one or two sentences why they differ.
+
+<Solution>
+
+```python
+import numpy as np
+
+def naive_softmax(logits: np.ndarray) -> np.ndarray:
+    exps = np.exp(logits)
+    return exps / exps.sum()
+
+def stable_softmax(logits: np.ndarray) -> np.ndarray:
+    shifted = logits - np.max(logits)
+    exps = np.exp(shifted)
+    return exps / exps.sum()
+
+def log_softmax(logits: np.ndarray) -> np.ndarray:
+    m = np.max(logits)
+    return logits - m - np.log(np.sum(np.exp(logits - m)))
+
+def cross_entropy_from_logits(logits: np.ndarray, true_class: int) -> float:
+    return -log_softmax(logits)[true_class]
+```
+
+```python
+logits = np.array([1000.0, 1.0, 1.0])
+naive_softmax(logits)   # array([nan, nan, nan])
+stable_softmax(logits)  # array([1., 0., 0.])
+cross_entropy_from_logits(logits, 0)  # ~0.0
+```
+
+`exp(1000)` overflows float64's representable range straight to `inf`; the denominator (the sum of three `exp` terms, one of which is already `inf`) is also `inf`, and `inf / inf` is mathematically undefined, so NumPy returns `nan` for all three entries — even though the intended answer is obvious (essentially all probability mass on the first class). `stable_softmax` shifts every logit down by `1000` first, so the largest term becomes `exp(0) = 1` and the other two become `exp(-999)` (underflowing harmlessly to `0.0` instead of overflowing), producing the exact, correct result with no `inf` or `nan` ever computed.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 2 · Implement" title="Verify the Central Limit Theorem by simulating sample-mean skewness">
+
+The Exponential(rate=1) distribution is heavily right-skewed (its true skewness is exactly `2`, versus `0` for a symmetric Gaussian). Simulate the Central Limit Theorem pulling that skew toward zero: for sample sizes `n` in `[1, 5, 30, 100]`, draw `20,000` sample means (each the average of `n` independent Exponential(1) draws), and compute the empirical skewness of each resulting collection of `20,000` means using `skewness(x) = mean((x - mean(x))**3) / std(x)**3`. Report the four skewness values and confirm they shrink toward `0` as `n` grows, roughly following a `2/√n` decay.
+
+<Solution>
+
+```python
+import numpy as np
+
+def skewness(samples: np.ndarray) -> float:
+    mean = samples.mean()
+    std = samples.std()
+    return np.mean((samples - mean) ** 3) / std ** 3
+
+rng = np.random.default_rng(0)
+
+for n in [1, 5, 30, 100]:
+    sample_means = rng.exponential(scale=1.0, size=(20_000, n)).mean(axis=1)
+    print(n, skewness(sample_means), 2 / np.sqrt(n))
+```
+
+Typical output (exact numbers vary with the random seed, but the pattern holds):
+
+```text
+n=1    skewness ≈ 2.00   (predicted 2/√1   = 2.00)
+n=5    skewness ≈ 0.88   (predicted 2/√5   ≈ 0.89)
+n=30   skewness ≈ 0.37   (predicted 2/√30  ≈ 0.37)
+n=100  skewness ≈ 0.20   (predicted 2/√100 = 0.20)
+```
+
+At `n = 1`, no averaging has happened yet, so the sample-mean distribution *is* the base Exponential(1) distribution — skewness `≈ 2`, matching it exactly. As `n` grows, the distribution of sample means becomes visibly more symmetric even though every individual draw underneath it is still exponential, not Gaussian at all — the CLT is a statement about what happens to the *sum*, not about any single draw suddenly changing shape. The `2/√n` decay is the Berry–Esseen refinement of the CLT: skewness of an average of `n` i.i.d. variables shrinks proportional to `skew(base) / √n`.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 3 · Classify" title="Pick the right distribution for the scenario">
+
+For each scenario, name the single best-fitting distribution from this lesson and justify it:
+
+(a) Whether a single email is spam or not spam.
+(b) Which of 50,000 vocabulary words a language model should predict next.
+(c) The number of requests arriving at a server in a given one-second window, given a known average rate.
+(d) Additive sensor noise on a continuous measurement, where the noise is the sum of many small, independent physical effects with no reason to favor one direction.
+(e) The initial values of a weight matrix before any training has happened, drawn from a fixed bounded range with no reason to prefer any value in that range over another.
+
+<Solution>
+
+**(a) Bernoulli.** Section 2 — a single binary outcome with one parameter `p`, exactly the object a sigmoid output already parameterizes.
+
+**(b) Categorical.** Section 2 — a single choice among `K = 50,000` mutually exclusive outcomes; this is precisely what softmax (Section 6) is constructed to produce a valid distribution over.
+
+**(c) Poisson.** Section 3 — a count of discrete events in a fixed window given a known average rate `λ`, the textbook Poisson setup.
+
+**(d) Normal (Gaussian).** Section 4 — noise that's the sum of many small independent contributions is exactly the Central Limit Theorem's setup, regardless of what distribution each individual contribution follows; symmetry with no preferred direction also matches the Gaussian's own symmetry around its mean.
+
+**(e) Uniform.** Section 3 — "a bounded range, no preference for any value within it" is the defining property of the uniform distribution, and is exactly the assumption behind uniform weight-initialization schemes.
+
+</Solution>
+</WorkTask>

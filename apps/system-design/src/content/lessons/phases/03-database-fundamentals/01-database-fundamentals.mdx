@@ -1,0 +1,227 @@
+---
+title: 'Database Fundamentals: <em>What Postgres Promises, and What Each Promise Costs</em>'
+subtitle: ACID, isolation levels, B-tree indexes, MVCC, and connection pooling aren't
+  independent trivia — each one is a guarantee bought by giving something else away,
+  and production database design is mostly about knowing which.
+summary: 'This lesson covers how a relational database like Postgres actually keeps
+  its promises: the write-ahead log that makes atomicity and durability survive a
+  crash, the isolation levels that trade anomaly prevention for throughput, and the
+  B-tree indexes that speed reads at a measurable cost to every write. It covers MVCC
+  as the mechanism behind non-blocking concurrent reads, how the query planner decides
+  between a sequential scan and an index scan, and closes with the normalization/denormalization
+  and connection-pooling decisions that separate a toy schema from one that survives
+  production load, illustrated by Figma''s multi-year path from a single Postgres
+  instance to an application-sharded fleet.'
+phase: 03-database-fundamentals
+phaseTitle: Phase 03 — Database Fundamentals
+order: 4
+lessonNumber: 1
+pubDate: '2026-09-23'
+hook: A database doesn't store your data so much as it stores a sequence of promises
+  about your data — and every one of those promises has a line item on the bill.
+hookCredit: — why ACID, isolation, and indexing are all the same kind of tradeoff
+sourceUrl: https://hld.handbook.academy/curriculum/prerequisites/database-fundamentals/
+---
+
+import Callout from "@florilex/tutorial-kit/components/Callout.astro";
+import Formula from "@florilex/tutorial-kit/components/Formula.astro";
+import WorkTask from "@florilex/tutorial-kit/components/WorkTask.astro";
+import Solution from "@florilex/tutorial-kit/components/Solution.astro";
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">1</span><h2 class="sec-title">ACID and the write-ahead log: durability without a crash tax</h2></div>
+
+Every relational database sells the same four-part promise, abbreviated ACID: **atomicity** (a transaction happens completely or not at all), **consistency** (the data never violates a declared constraint), **isolation** (concurrent transactions don't see each other's half-finished work — Section 2 is entirely about how much of this you actually get), and **durability** (once the database says "committed," that data survives a crash one instant later).
+
+Atomicity and durability both come from the same mechanism: the **write-ahead log (WAL)**. Before a transaction's changes are allowed to touch the actual table and index pages, they're first appended to a sequential log file and flushed to disk with `fsync` — only after that flush succeeds does the client get its commit acknowledgment. This ordering is the entire trick: the in-memory pages can lag behind, get evicted, or never make it to disk before a crash, because the WAL already has a durable, ordered record of exactly what should have happened. Recovery after a crash means replaying the WAL forward from the last checkpoint, redoing every committed change that hadn't yet made it to the table pages — no manual repair, no guessing, just deterministic replay of a log that was fsynced before anyone was told the transaction succeeded.
+
+The cost is that every write pays for two physical writes instead of one — the WAL append and, eventually, the actual page write during a background checkpoint — which is the first of several tensions this lesson keeps returning to: durability isn't free, it's a specific, measurable I/O cost paid on the write path in exchange for a crash-survival guarantee you'd otherwise have no way to make at all.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">2</span><h2 class="sec-title">Isolation levels: choosing which anomalies you're willing to tolerate</h2></div>
+
+Isolation is graded, not binary. The SQL standard defines four levels, each one permitting a strict subset of the anomalies the level below it allows:
+
+| Level | Dirty Read | Non-Repeatable Read | Phantom Read | Write Skew |
+|---|---|---|---|---|
+| Read Uncommitted | Yes | Yes | Yes | Yes |
+| Read Committed | No | Yes | Yes | Yes |
+| Repeatable Read | No | No | No* | Yes |
+| Serializable | No | No | No | No |
+
+Postgres defaults to **Read Committed** — every individual statement within a transaction sees a fresh snapshot, but two statements in the same transaction can see different data if something else committed in between. (Postgres's Repeatable Read also happens to block phantom reads, stronger than the standard technically requires — marked `*` above.)
+
+The anomaly that survives even at Repeatable Read is the subtle one: **write skew**. Two transactions each read some shared condition, each independently decide their own write is safe based on what they read, and both commit — yet the combined effect violates an invariant that neither transaction individually broke. The canonical example: a hospital requires at least one physician on call at all times; two on-call physicians, in separate transactions, each check "is someone else still on call?", each sees "yes," and each takes themselves off call. Both transactions are individually correct. The result — nobody on call — is not.
+
+Only **Serializable** isolation closes this gap, and it does so not by locking everything up front but via **Serializable Snapshot Isolation (SSI)**: Postgres tracks read/write dependencies between concurrent transactions at runtime and, if it detects a cycle that couldn't have arisen from any valid serial ordering, aborts one of the transactions with SQLSTATE `40001` — the application is expected to retry.
+
+<Callout label="Takeaway">
+Isolation strength and throughput trade directly against each other: Serializable is the only level immune to write skew, but it's also the only one that can abort a perfectly well-formed transaction just because another one happened to run concurrently. Reach for it specifically when an invariant spans more than one row and correctness matters more than a retry's latency cost.
+</Callout>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">3</span><h2 class="sec-title">B-tree indexes: what makes a query fast, and the write cost it doesn't advertise</h2></div>
+
+An index gives the planner a sorted structure to search instead of scanning the whole table — Postgres's default index type is a B-tree with Lehman-Yao-style right-links that let concurrent searches proceed safely without a global lock. At the usual 8 KB page size and a branching factor in the hundreds, an index over billions of rows stays only 3-5 levels deep, so a single lookup costs roughly 3-5 random reads — about 10 microseconds each if the pages are cached in memory, closer to 10 milliseconds each on a cold read from disk. That gap, three or four orders of magnitude, is the entire reason a warm cache matters as much as the index itself.
+
+Composite indexes — one index spanning multiple columns — follow **leftmost-prefix** logic: an index on `(a, b)` can serve a query filtering on `a` alone or on `a AND b`, but not one filtering on `b` alone. Picture a phone book sorted by surname, then given name: finding every "Smith" is a fast, localized scan; finding every "John," regardless of surname, means reading the entire book, because the sort order never grouped Johns together. Two refinements narrow this further: a **covering index** (Postgres's `INCLUDE` clause) tacks on extra payload columns without changing the sort key, letting an *Index Only Scan* answer a query straight from the index with no trip to the underlying table at all; a **partial index** restricts what gets indexed at all via a `WHERE` clause — indexing only `status = 'pending'` rows, say — which can shrink the index by 100x when the predicate is sparse.
+
+None of this is free. Every index on a table means every write to that table updates every one of its indexes too, each one its own WAL-logged operation.
+
+<Callout label="Careful" variant="warn">
+Uber's widely cited example: a table with 12 indexes turned a single-field update into 13 physical writes — the row itself, plus one pointer update per index — enough sustained write amplification that it was a real factor in their 2016 migration off Postgres to MySQL. Never add an index speculatively; measure the read it's meant to fix with `EXPLAIN ANALYZE` (Section 4) first, and check `pg_stat_user_indexes` afterward for indexes sitting at `idx_scan = 0` that are pure write tax with no read ever using them.
+</Callout>
+
+One detail that compounds with all of this on write-heavy tables: primary key choice affects B-tree insertion locality directly. A random key like UUIDv4 scatters inserts across the entire keyspace, forcing writes into essentially random pages; a time-ordered key like UUIDv7 keeps new rows landing near the current "end" of the tree, preserving locality the same way an auto-incrementing integer would. Postgres 18 benchmarks showed UUIDv7 inserting roughly 11x faster than UUIDv4 at 50 million rows, with 0% leaf-page fragmentation versus roughly 50% for the random key.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">4</span><h2 class="sec-title">Query execution: what the planner decides, and how to check its work</h2></div>
+
+A query passes through three stages before it returns a row: the **parser** turns SQL text into an abstract syntax tree, the **planner** chooses an execution strategy using table statistics collected in `pg_statistic`, and the **executor** actually runs that plan. The planner's central decision is how selective a filter is — what fraction of rows it's expected to match — and it picks the access method accordingly: a **Sequential Scan** for a low-selectivity filter (touching most of the table anyway, so an index would just add overhead), an **Index Scan** for a high-selectivity filter (few enough matching rows that jumping straight to them via the index beats reading everything), and a **Bitmap Heap Scan** for the middle ground — collect matching row locations from the index first, sort them into physical (sequential) order, then read the table in that order, trading a little index overhead for far fewer random disk seeks than a naive Index Scan would take on a moderately large result set.
+
+`EXPLAIN` shows the planner's *estimate*: `cost=startup..total rows=N width=B`, computed entirely from statistics, before the query ever runs. `EXPLAIN ANALYZE` actually executes the query and adds the *real* timings and row counts alongside the estimate. The gap between the two is the diagnostic signal that matters: an estimated 10 rows against an actual 100,000 means the planner is working from stale or missing statistics, and it will keep picking the wrong access method — often a Sequential Scan where an Index Scan was available — until an explicit `ANALYZE` (or the autovacuum daemon's own analyze pass) refreshes `pg_statistic` to match reality.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">5</span><h2 class="sec-title">MVCC: readers that never block writers, and what that defers</h2></div>
+
+Postgres never lets a reader and a writer block each other on the same row, and it achieves this by never overwriting a row in place. **Multi-Version Concurrency Control (MVCC)** means an `UPDATE` doesn't modify the existing tuple — it writes an entirely new tuple and marks the old one with the ID of the transaction that superseded it (`xmax`), leaving the original physically intact. Every transaction reads against a snapshot: a tuple is visible if its inserting transaction (`xmin`) committed before the snapshot was taken, *and* its deleting transaction either never committed at all or committed after the snapshot. Because a reader is just comparing transaction IDs against tuples that already exist, it never has to wait for a writer to finish, and a writer never has to wait for a reader to leave — the two guarantees Section 2's stricter isolation levels otherwise have to fight hard for.
+
+That non-blocking guarantee isn't free either: every superseded tuple becomes a **dead tuple**, still physically occupying its page until a background process called **VACUUM** reclaims the space. A long-running transaction is the specific failure mode to watch for — as long as it's open, its snapshot pins the oldest version any reader might still need, which means VACUUM can't clean up *anything* newer than that snapshot no matter how old the update actually is, and dead tuples keep accumulating underneath it.
+
+<Callout label="Careful" variant="warn">
+A transaction left open for minutes — commonly because it made a network call, waited on an external API, or was simply left idle mid-transaction by application code — can single-handedly stall garbage collection across the whole table, bloating both the table and its indexes. Left unchecked for long enough, Postgres also has to guard against transaction-ID wraparound (IDs are 32-bit and comparisons rely on ordering), and will refuse new writes near the 2-billion-transaction boundary rather than risk old rows silently appearing "in the future." The fix in both cases is the same: keep transactions sub-second, and never perform network I/O inside one.
+</Callout>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">6</span><h2 class="sec-title">Normalization, denormalization, and the connections it takes to serve both</h2></div>
+
+Normalization — storing each fact exactly once, related by foreign keys — minimizes write anomalies and storage, and it's the right default for OLTP systems where data changes constantly and a JOIN at read time is cheap relative to the write traffic. Denormalization inverts that bet: duplicate the fact everywhere it's read, so a read never needs a JOIN at all. A social feed is the textbook case — instead of joining "posts" against "follows" on every page load, a new post fans out at write time to a precomputed, per-follower timeline sitting in something like Redis, turning what would be a JOIN into an O(1) lookup. The rule of thumb for when this trade is worth making: a read-to-write ratio past roughly 100:1, where the write-time cost of fanning out is dwarfed by how many times that data gets read afterward. The production pattern that lets a system have both: normalize the source of truth, denormalize the read path, and connect the two with replication — change data capture (CDC) or an event stream keeping the denormalized copy eventually consistent with the row that actually owns the fact.
+
+Scaling any of this eventually runs into a second, unrelated constraint: connections themselves. Postgres is process-per-connection — each open connection is a full OS backend process, costing roughly 5-10 MB of memory, with a default `max_connections` of 100. That default looks generous until you count application instances: 20 instances opening a pool of 50 connections each is already 1,000 connections, 10x the default, and 50-100 GB of memory spent just holding backend processes open, most of them idle most of the time.
+
+<Formula name="Backend memory at naive pool sizing">
+20 instances × 50 connections × ~7 MB/backend ≈ 7 GB — before a single query runs
+</Formula>
+
+**PgBouncer** fixes this by sitting in front of Postgres and multiplexing thousands of client connections onto a small pool of real backends — often as few as 20. Its *transaction pooling* mode hands a real backend to a client only for the duration of one transaction, returning it to the pool the instant that transaction ends, which is what makes the multiplexing ratio so large. The cost is that anything relying on session state — a `SET` that's meant to persist, an advisory lock held across statements, a cursor held open `WITH HOLD` — silently breaks, because the next statement might land on a completely different backend. Production use requires designing the application to be stateless per-transaction from the start, not bolting pooling on afterward.
+
+Figma's multi-year database history is this whole lesson compressed into one migration story: a single Postgres RDS instance at 65% peak CPU in 2020, with its database fleet growing 100x by 2024, then vertical partitioning in 2022 — grouping related tables like "files" and "organizations" onto dedicated physical databases, each fronted by its own PgBouncer, migrated via logical replication with indexes dropped before the bulk copy and rebuilt after to avoid slow row-by-row updates — and finally, in 2023, a Go-based proxy that parses each query's AST, extracts a shard key (`UserID`, `FileID`, `OrgID`), and routes it to the correct physical shard, using hash-based placement specifically to avoid the hotspots an auto-incrementing key would create. They evaluated CockroachDB and Vitess and rejected both for migration risk, choosing to keep scaling the database they already understood rather than betting the company on a new one.
+
+</section>
+
+<WorkTask label="Task 1 · Implement" title="Simulate WAL-based crash recovery">
+
+Implement a tiny key-value store whose state survives a simulated crash, using the write-ahead-log pattern from Section 1:
+
+```python
+class WALStore:
+    def put(self, key: str, value: str) -> None:
+        ...  # append to a durable log, then apply to the in-memory table
+
+    def crash(self) -> None:
+        ...  # simulate power loss: wipe the in-memory table, keep the log
+
+    def recover(self) -> None:
+        ...  # rebuild the table by replaying the log from scratch
+```
+
+After implementing it, write a short scenario that calls `put` a few times, `crash()`, then `recover()`, and confirm the data is back. Then answer in one sentence: why does appending to the log *before* applying the change to the table matter for atomicity, not just durability?
+
+<Solution>
+
+```python
+class WALStore:
+    def __init__(self):
+        self.wal: list[tuple[str, str]] = []   # durable log
+        self.table: dict[str, str] = {}        # in-memory "pages"
+
+    def put(self, key: str, value: str) -> None:
+        self.wal.append((key, value))  # simulated fsync: durable the instant this returns
+        self.table[key] = value
+
+    def crash(self) -> None:
+        self.table = {}   # in-memory state is gone; the log is not
+
+    def recover(self) -> None:
+        for key, value in self.wal:
+            self.table[key] = value
+
+
+store = WALStore()
+store.put("a", "1")
+store.put("b", "2")
+store.crash()
+assert store.table == {}
+store.recover()
+assert store.table == {"a": "1", "b": "2"}
+```
+
+Appending to the log first is what makes atomicity possible, not just durability: if the crash lands *before* the log append finishes, nothing happened at all — recovery replays nothing for that write, so the transaction is cleanly "none of it." If the table were written first and the crash hit before the log append, you'd have an applied change with no durable record of it — exactly the half-finished state atomicity promises can't happen. Making the log append the single point of truth means recovery only ever has two outcomes for any given write: fully applied, or never happened — never partially.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 2 · Trace" title="Identify the anomaly">
+
+Two transactions run concurrently under Postgres's default Read Committed isolation against a `duty_roster` table, where each row has `physician_id` and `on_call boolean`. At the start, exactly two rows have `on_call = true`.
+
+```text
+Txn A:                                Txn B:
+SELECT count(*) FROM duty_roster      SELECT count(*) FROM duty_roster
+  WHERE on_call;   -- returns 2          WHERE on_call;   -- returns 2
+UPDATE duty_roster SET on_call = false
+  WHERE physician_id = 'A';
+COMMIT;                               UPDATE duty_roster SET on_call = false
+                                         WHERE physician_id = 'B';
+                                       COMMIT;
+```
+
+(a) Under Read Committed, does anything block or abort? What's the on-call count after both commit?
+(b) What would Postgres's Serializable isolation detect instead, and what does it do about it?
+(c) Name the anomaly.
+
+<Solution>
+
+**(a)** Nothing blocks and nothing aborts. Both `SELECT`s run against a fresh snapshot taken before the other transaction's `UPDATE` has committed, so both see `count = 2` and both independently conclude it's safe to go off call. Both `UPDATE`s succeed, both `COMMIT`s succeed. Final on-call count: **0** — the invariant "at least one physician on call" is violated even though neither transaction, in isolation, did anything wrong.
+
+**(b)** Serializable Snapshot Isolation tracks read/write dependencies between concurrently running transactions: Txn A read the set of rows that Txn B later wrote to (B's row matched A's `WHERE on_call` filter), and symmetrically Txn B read the set A later wrote to. That's a read-write dependency cycle — a pattern that couldn't have arisen from *any* valid one-at-a-time ordering of the two transactions — so Postgres aborts one of them at commit time with SQLSTATE `40001`. The application retries the aborted transaction; on retry, its `SELECT` now sees the other transaction's already-committed change and correctly refuses to also go off call.
+
+**(c)** **Write skew** — exactly Section 2's on-call physician example, reproduced with SQL instead of prose.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 3 · Classify" title="Pick the right database technique for each scenario">
+
+For each scenario, name the single best-fitting technique from this lesson and justify it against at least one alternative:
+
+(a) A `users` table filtered by `(tenant_id, email)` together in nearly every query, and never by `email` alone.
+(b) An `orders` table where 95% of rows are `status = 'fulfilled'` and effectively never queried again, but every operations dashboard filters on `status = 'pending'`.
+(c) A product page with a roughly 1000:1 read-to-write ratio, currently joining 4 tables on every view.
+(d) An invariant spanning two rows ("combined balance across both accounts must never go negative") that keeps getting violated under concurrent transfers, even at Repeatable Read.
+(e) A fleet of 30 application instances, each holding a pool of 40 Postgres connections, regularly hitting "sorry, too many clients already."
+
+<Solution>
+
+**(a) Composite index on `(tenant_id, email)`.** Section 3's leftmost-prefix rule fits this exactly — the index serves both `tenant_id` alone and `tenant_id AND email`, matching the real query pattern; an index on `email` alone would never get used by these tenant-scoped lookups.
+
+**(b) Partial index: `CREATE INDEX ... WHERE status = 'pending'`.** Section 3 — indexing only the ~5% of rows anyone actually queries keeps the index a fraction of the size of a full-table index, with no benefit lost since the other 95% is never looked up by status again.
+
+**(c) Denormalize the read path.** Section 6 — a 1000:1 ratio is well past the ~100:1 threshold where precomputing/fanning out the joined result at write time pays for itself many times over per day; normalizing would still be correct here, just needlessly expensive for how the data is actually used.
+
+**(d) Serializable isolation, or explicit `SELECT ... FOR UPDATE` locking.** Section 2 — this is write skew in its general form (an invariant spanning multiple rows, each transaction individually consistent with what it read), which Repeatable Read is documented to permit and only Serializable (or manual locking that forces serialization) prevents.
+
+**(e) PgBouncer in transaction pooling mode.** Section 6 — 30 × 40 = 1,200 desired connections against Postgres's process-per-connection model, each backend costing real memory, is exactly the case pooling exists for; raising `max_connections` to 1,200 would work until the memory cost of that many backend processes becomes the actual bottleneck.
+
+</Solution>
+</WorkTask>

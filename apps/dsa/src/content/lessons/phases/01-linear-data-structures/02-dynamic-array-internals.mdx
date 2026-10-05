@@ -1,0 +1,365 @@
+---
+title: 'Dynamic Array Internals: <em>Where the O(1) in Amortized O(1) Actually Comes
+  From</em>'
+subtitle: Every growth factor above 1 produces the same O(1) amortized push — but
+  the specific number each language picked trades off wasted memory, copy cost, and
+  whether freed buffers can ever be reused, and none of those tradeoffs show up in
+  the big-O notation itself.
+summary: This lesson generalizes the doubling-array amortized-cost proof from the
+  Big-O lesson to any growth factor b > 1, deriving a true upper bound on the amortized
+  cost per push and showing why doubling's well-known constant is 3, not 2. It surveys
+  the wildly different growth factors real standard libraries chose (Java's 1.5x,
+  CPython's roughly 1.125x, C++'s 2x) and the golden-ratio argument some of them used
+  to justify picking below 2x. It covers the sharp distinction between capacity and
+  size that every dynamic-array implementation has to maintain, why almost no production
+  library shrinks a dynamic array automatically, and closes with deamortization —
+  the technique that bounds a dynamic array's worst-case single-operation cost for
+  real-time systems that can't tolerate an occasional O(n) push.
+phase: 01-linear-data-structures
+phaseTitle: Phase 01 — Linear Data Structures
+order: 6
+lessonNumber: 2
+pubDate: '2026-10-04'
+hook: A dynamic array's push is O(1) in the same way a mortgage payment is affordable
+  — the cost didn't disappear, it got spread across every push that came before the
+  expensive one.
+hookCredit: — what amortized actually hides
+sourceUrl: https://dsa.handbook.academy/curriculum/linear-data-structures/dynamic-array-internals/
+---
+
+import Callout from "@florilex/tutorial-kit/components/Callout.astro";
+import Formula from "@florilex/tutorial-kit/components/Formula.astro";
+import WorkTask from "@florilex/tutorial-kit/components/WorkTask.astro";
+import Solution from "@florilex/tutorial-kit/components/Solution.astro";
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">1</span><h2 class="sec-title">Generalizing the proof: the real amortized bound, and why doubling's constant is 3, not 2</h2></div>
+
+The Big-O lesson's Section 6 proved amortized O(1) pushes for the specific case of doubling (`b = 2`): resizes happen at capacities `1, 2, 4, ..., n/2`, the copies sum to just under `n`, and dividing by `n` pushes gives a constant. The same style of argument goes through for any growth factor `b > 1`, not just 2 — but doing it carefully for a general `b` and a general `n` (not just a convenient round number) reveals a subtlety the simpler case hides.
+
+With growth factor `b`, resizes happen at capacities `b^0, b^1, ..., b^(k-1)`, where `k` is the smallest integer large enough that `b^k ≥ n` — the first capacity that can hold all `n` pushes without resizing again. The `i`-th resize copies everything already in the buffer at that moment: `b^(i-1)` elements. Summing every copy across every resize is a geometric series:
+
+<Formula name="Total copy cost under growth factor b">
+Σ b^(i-1) for i = 1 to k = (b^k - 1) / (b - 1)
+</Formula>
+
+Because `k` was chosen as the *smallest* power satisfying `b^k ≥ n`, the previous power must have been too small: `b^(k-1) < n`, which means `b^k < b·n`. Substituting that into the sum: total copies `< (b·n) / (b - 1)`. Add the `n` individual O(1) writes that happen regardless of resizing, and the total work across `n` pushes is strictly less than `n + bn/(b-1) = n·(2b-1)/(b-1)`. Divide by `n` pushes, and the amortized cost per push is bounded above by `(2b-1)/(b-1)` — a constant independent of `n`, for any `b` strictly greater than 1. The one condition that actually matters for the proof to work at all is `b > 1`; **arithmetic growth** (adding a fixed number of slots every time instead of multiplying by a factor) fails this condition entirely, producing `O(n)` amortized cost per push instead of `O(1)` — exactly why no production dynamic array grows by a fixed increment.
+
+| Growth factor `b` | Amortized upper bound `(2b-1)/(b-1)` |
+|---|---|
+| 2.0 | 3.0 |
+| 1.5 | 4.0 |
+| 1.25 | 6.0 |
+| 1.125 | 10.0 |
+
+That `3.0` for `b = 2` is worth pausing on: a quick, looser argument that ignores exactly where `n` falls relative to the surrounding powers of `b` suggests a smaller constant of `2`, and it's a well-known textbook result (CLRS's accounting-method analysis of table doubling) that the real, defensible bound for doubling is `3` credits per push, not `2` — one to pay for the push itself, one to pay for that element's own eventual copy, one to pay for copying some earlier element on its behalf. The table above is the entire tension the rest of this lesson is about: a smaller `b` wastes less peak memory on over-allocation (Section 2's comparison table is about exactly this), but it pays for that with a larger — still constant, still `O(1)`, but numerically bigger — amortized copy cost per push, since resizes happen more often and each one's "wasted trailing capacity" matters more relative to the smaller jumps between resizes.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">2</span><h2 class="sec-title">Every major language picked a different b, and the table nobody tells you about</h2></div>
+
+If amortized `O(1)` holds for any `b > 1`, the actual choice of `b` is a real engineering decision with no single correct answer, and production standard libraries have landed in very different places:
+
+| Library | Growth factor | Mechanism |
+|---|---|---|
+| Java `ArrayList` | 1.5x | `oldCapacity + (oldCapacity >> 1)`, starts at capacity 10, allocated lazily |
+| CPython `list` | ~1.125x | `(newsize + (newsize >> 3) + 6) & ~3`, starts at capacity 0 |
+| C++ `libstdc++` (`vector`) | 2x | starts at capacity 0 |
+| C++ `libc++` (`vector`) | 2x | `max(2 × capacity, new_size)`, starts at capacity 0 |
+| C++ MSVC STL (`vector`) | 1.5x | `oldCapacity + oldCapacity/2`, starts at capacity 0 |
+| Go slices (1.18+) | 2x below 256 elements, smoothing toward 1.25x above | runtime-tuned, not a single constant |
+
+CPython's own history is a useful case study in why this number isn't fixed once and left alone: it originally doubled capacity outright, then dropped to 1.5x as RAM became a tighter constraint on very large lists, then dropped again to the current ~1.125x specifically to tighten the peak memory a large list can transiently hold during a resize — each step trading a little more amortized copy cost (Section 1's table) for a smaller worst-case memory overshoot.
+
+<Callout label="Careful" variant="warn">
+'Python doubles its list on every append' has been a wrong claim for over two decades — CPython's actual growth factor has been below 1.2x for most of that time. It's worth knowing the real number specifically because code that estimates memory headroom from 'it'll roughly double' will be off by nearly an order of magnitude on a large list.
+</Callout>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">3</span><h2 class="sec-title">The golden ratio argument: why 1.5x isn't just 'less wasteful than 2x'</h2></div>
+
+There's a subtler reason some libraries (MSVC STL, Facebook's Folly) specifically avoided `b = 2`, beyond simply wanting less peak over-allocation. Picture every buffer a dynamic array has ever outgrown and freed, sitting unused: with `b = 2`, those freed buffers have sizes `1, 2, 4, ..., 2^(k-1)`, summing to `2^k - 1` — one short of `2^k`, the size of the next allocation the array is about to request. No matter how many old buffers have piled up, their combined freed memory never quite reaches what's needed to satisfy the next resize from a coalescing allocator's free list; the next allocation always has to come from fresh memory instead.
+
+<Formula name="The golden ratio threshold">
+φ = (1 + √5) / 2 ≈ 1.618
+</Formula>
+
+For any growth factor `b < φ`, the sum of previously freed buffer sizes eventually *exceeds* the size of the next allocation, which means a sufficiently smart coalescing memory allocator can, in principle, satisfy that next resize entirely out of memory the array itself already freed, rather than requesting new memory from the operating system at all. `b = 1.5` sits safely under that threshold; `b = 2` sits exactly on the boundary where it never does. This is a real, if secondary, reason MSVC STL and Folly chose 1.5x specifically — GCC's libstdc++ and LLVM's libc++ chose to keep `b = 2` anyway, favoring the lower amortized constant from Section 1's table over this reuse property, which is itself only a potential benefit contingent on the allocator actually being a coalescing one in the first place.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">4</span><h2 class="sec-title">Capacity vs. size: the distinction a dynamic array can't afford to blur</h2></div>
+
+Every dynamic array implementation tracks two numbers, not one: **size** (how many real elements are actually stored) and **capacity** (how much backing buffer is currently allocated, size included). The entire amortized-growth story only works because capacity is allowed to run ahead of size — the slack between them is exactly the space a push can fill without triggering a copy.
+
+The distinction has a sharp edge in languages that expose it directly. In C++, `std::vector<int> v(n);` both allocates *and* value-initializes `n` elements — size and capacity both become `n`, every slot holds a real, read-safe `0`. `std::vector<int> v; v.reserve(n);` only allocates — capacity becomes `n`, but size stays `0`, and every one of those `n` slots is uninitialized memory that has never been constructed. Reading from any of them — say, by mistakenly iterating up to `v.capacity()` instead of `v.size()` — isn't just wrong, it's **undefined behavior**: not a bounds error the runtime catches, but a read of memory the language gives no guarantees about at all.
+
+<Callout label="Careful" variant="warn">
+`reserve(n)` is a pure optimization hint — telling the array roughly how many pushes are coming so it can skip the intermediate resizes — and should never be reached for as a substitute for actually constructing `n` elements. Mixing up which one was meant is one of the more common sources of a silent, hard-to-reproduce memory bug in exactly this part of the standard library.
+</Callout>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">5</span><h2 class="sec-title">Shrinking is the asymmetric half of this story, and most libraries just skip it</h2></div>
+
+Growing a dynamic array has a clean amortized story (Section 1); shrinking it back down when elements are removed does not, and the naive version actively breaks the amortization guarantee rather than merely failing to provide one. The tempting rule — halve the capacity the moment `size` drops to `capacity / 2` — looks symmetric with doubling on growth, but it isn't: a workload that keeps bouncing between a push and a pop right at that exact boundary triggers a full resize on every single operation, since each push crosses back above the halving threshold and each pop crosses back below it. That's `O(n)` per operation, forever, for a workload that never even changes size on net.
+
+The standard fix is **hysteresis**: don't shrink the moment `size` reaches `capacity / 2`; wait until it drops all the way to `capacity / 4` (CLRS's recommended threshold), and even then only shrink down to roughly `2 × size`, not all the way to a tight fit. That leaves a wide dead zone where push-pop oscillation never crosses either threshold at all, at the cost of tolerating up to 75% of the buffer sitting unused in the worst case — a deliberate, named trade of wasted memory for restored amortized guarantees, not an oversight.
+
+Most production libraries sidestep the question entirely by simply never shrinking automatically: CPython's `list` never releases capacity back to the allocator on its own, Java's `ArrayList` only shrinks when the application explicitly calls `trimToSize()`, and Go's slices never shrink their backing array no matter how much gets removed — in every case, the library is choosing to let a collection that was briefly large stay at that peak memory footprint indefinitely, rather than risk the push-pop thrashing a naive automatic shrink would reintroduce.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">6</span><h2 class="sec-title">Deamortization: bounding the worst single operation, not just the average</h2></div>
+
+The Big-O lesson's Section 6 already flagged the gap amortized analysis leaves open: amortized O(1) is a statement about a long sequence's average cost, and says nothing about any individual call — a hard real-time system (audio processing, a flight control loop, a GC-sensitive trading system) can be broken by the one push that happens to trigger the O(n) copy, even though the amortized bound looks perfectly safe on paper averaged over the whole run.
+
+**Deamortization** is the general technique for closing that gap: instead of doing the entire resize copy in one shot at the moment capacity runs out, spread it across several subsequent operations, copying only a small, bounded number of old elements on each push until the new buffer is fully populated, with both the old and new buffer kept alive simultaneously during the transition. Every individual push now does a small, fixed amount of extra work — never the full O(n) copy in one call — at the cost of needing to track which buffer (old, new, or both) a given read should check during the transition window, extra bookkeeping real-time implementations accept specifically to convert an amortized guarantee into a true worst-case one.
+
+This isn't a dynamic-array-specific trick — the identical geometric-resize argument from Section 1 is what underlies the amortized `O(1)` claim for hash table insertion (table doubling, same proof, same growth-factor tradeoffs), and the same deamortization technique shows up again, in a different shape, in real-time priority-queue implementations that can't tolerate an occasional expensive heap operation either. Dynamic arrays are the simplest place to learn the technique precisely because there's nothing else going on to obscure it.
+
+</section>
+
+<WorkTask label="Task 1 · Implement" title="Measure the amortized cost empirically, and check it against Section 1's bound">
+
+Implement a `DynamicArray` class with a configurable `growth_factor` `b` (a float greater than 1) that tracks the total number of element-copies performed across its lifetime (not counting the `n` individual pushes themselves):
+
+```python
+class DynamicArray:
+    def __init__(self, growth_factor: float = 2.0):
+        ...
+
+    def push(self, value) -> None:
+        ...  # grow first if size == capacity, then write
+```
+
+`push` should grow the buffer — copying every existing element into a new buffer of size `ceil(capacity * growth_factor)` (at least `capacity + 1`) — whenever `size == capacity`, before writing the new value. For `n = 100_000` pushes, and each `b` in `[2.0, 1.5, 1.25, 1.125]`, report the empirical amortized cost per push, `(total_copies + n) / n`, and compare it against Section 1's upper bound, `(2b - 1) / (b - 1)`.
+
+<Solution>
+
+```python
+import math
+
+class DynamicArray:
+    def __init__(self, growth_factor: float = 2.0):
+        self.growth_factor = growth_factor
+        self.capacity = 1
+        self.size = 0
+        self.buffer = [None] * self.capacity
+        self.total_copies = 0
+
+    def push(self, value) -> None:
+        if self.size == self.capacity:
+            self._grow()
+        self.buffer[self.size] = value
+        self.size += 1
+
+    def _grow(self) -> None:
+        new_capacity = max(self.capacity + 1, math.ceil(self.capacity * self.growth_factor))
+        new_buffer = [None] * new_capacity
+        for i in range(self.size):
+            new_buffer[i] = self.buffer[i]
+            self.total_copies += 1
+        self.buffer = new_buffer
+        self.capacity = new_capacity
+
+
+n = 100_000
+for b in [2.0, 1.5, 1.25, 1.125]:
+    arr = DynamicArray(growth_factor=b)
+    for i in range(n):
+        arr.push(i)
+    empirical = (arr.total_copies + n) / n
+    upper_bound = (2 * b - 1) / (b - 1)
+    print(f'b={b}: empirical={empirical:.3f}, upper bound={upper_bound:.3f}')
+```
+
+```text
+b=2.0:   empirical=2.311, upper bound=3.000
+b=1.5:   empirical=3.765, upper bound=4.000
+b=1.25:  empirical=5.819, upper bound=6.000
+b=1.125: empirical=9.229, upper bound=10.000
+```
+
+Every empirical value lands comfortably under Section 1's bound, confirming the amortized cost really is a constant independent of `n` for every growth factor tested. The empirical number isn't a tight match to the bound because the bound describes a worst case: it assumes `n` lands immediately after crossing a power-of-`b` capacity threshold, so the single most recent resize ends up having copied nearly as many elements as `n` itself. Running with a different `n` closer to an exact power of a given `b` would push the empirical number down toward the smaller, idealized `b/(b-1)` figure instead, since that 'wasted trailing capacity' from the last resize would shrink relative to `n`.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 2 · Implement" title="Reproduce the capacity-vs-size bug class, without real undefined behavior">
+
+C++'s `std::vector<int> v(n);` allocates and initializes `n` elements; `std::vector<int> v; v.reserve(n);` only allocates. Reimplement that distinction in Python with an observable (not literally undefined) failure mode, using a sentinel for 'never constructed':
+
+```python
+UNINITIALIZED = object()
+
+class DynamicArray:
+    def __init__(self):
+        ...
+
+    def reserve(self, n: int) -> None:
+        ...  # grow capacity only -- size is untouched, new slots are UNINITIALIZED
+
+    def resize(self, n: int, default=0) -> None:
+        ...  # grow size to n, filling every new slot with `default`
+
+    def __getitem__(self, i: int):
+        ...  # raise if the slot at i is still UNINITIALIZED
+```
+
+Demonstrate the bug: build an array, call `reserve(5)`, then show that iterating `range(arr.size)` never touches an uninitialized slot, while iterating `range(arr.capacity)` does — and compare against calling `resize(5)` instead, where iterating by capacity is safe because every slot really was initialized.
+
+<Solution>
+
+```python
+UNINITIALIZED = object()
+
+class DynamicArray:
+    def __init__(self):
+        self.capacity = 0
+        self.size = 0
+        self.buffer = []
+
+    def reserve(self, n: int) -> None:
+        if n <= self.capacity:
+            return
+        self.buffer = self.buffer + [UNINITIALIZED] * (n - self.capacity)
+        self.capacity = n
+        # size is untouched -- this is the entire point of reserve()
+
+    def resize(self, n: int, default=0) -> None:
+        if n > self.capacity:
+            self.reserve(n)
+        for i in range(self.size, n):
+            self.buffer[i] = default
+        self.size = n
+
+    def __getitem__(self, i: int):
+        value = self.buffer[i]
+        if value is UNINITIALIZED:
+            raise RuntimeError(f'read of uninitialized slot {i} -- undefined behavior in a real vector')
+        return value
+
+
+arr = DynamicArray()
+arr.reserve(5)
+print(arr.size, arr.capacity)          # 0 5 -- reserve changed capacity only
+
+for i in range(arr.size):              # safe: size is still 0, loop body never runs
+    print(arr[i])
+
+try:
+    for i in range(arr.capacity):      # the bug: iterating by capacity instead of size
+        print(arr[i])
+except RuntimeError as e:
+    print('caught:', e)
+
+arr2 = DynamicArray()
+arr2.resize(5)                         # the constructor-equivalent: allocates AND initializes
+print(arr2.size, arr2.capacity)        # 5 5
+print([arr2[i] for i in range(arr2.capacity)])  # safe -- every slot was initialized
+```
+
+`reserve(5)` only moves `capacity` to 5, leaving `size` at 0 and every new slot as the `UNINITIALIZED` sentinel; iterating by `size` correctly does nothing, while iterating by `capacity` walks straight into slots that were never constructed, exactly the real `vector::reserve` trap from Section 4. `resize(5)` moves both `size` and `capacity` to 5 and explicitly fills every new slot with `default`, so iterating by `capacity` afterward is completely safe — it's the Python stand-in for `std::vector<int> v(n);`, which allocates and initializes in one step.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 3 · Implement" title="Show that naive shrinking thrashes, and hysteresis fixes it">
+
+Implement two array classes, both supporting `push` (doubling capacity when `size == capacity`) and `pop` (decrementing `size`), each tracking `resize_count`:
+
+```python
+class NaiveShrinkArray:
+    def pop(self):
+        ...  # shrink to capacity // 2 the moment size <= capacity // 2
+
+class HysteresisArray:
+    def pop(self):
+        ...  # shrink to 2 * size, but only once size <= capacity // 4
+```
+
+Starting both from two pushed elements (`capacity = 2`, `size = 2`), run 1,000 rounds of `pop()` followed by `push(0)` on each, and report `resize_count` for both. Explain in 2-3 sentences, tying back to Section 5, why one of them keeps resizing on almost every operation while the other barely resizes at all.
+
+<Solution>
+
+```python
+class NaiveShrinkArray:
+    def __init__(self):
+        self.capacity = 1
+        self.size = 0
+        self.buffer = [None] * self.capacity
+        self.resize_count = 0
+
+    def push(self, value) -> None:
+        if self.size == self.capacity:
+            self._resize(self.capacity * 2)
+        self.buffer[self.size] = value
+        self.size += 1
+
+    def pop(self):
+        value = self.buffer[self.size - 1]
+        self.size -= 1
+        if self.capacity > 1 and self.size <= self.capacity // 2:
+            self._resize(max(self.capacity // 2, 1))
+        return value
+
+    def _resize(self, new_capacity: int) -> None:
+        self.buffer = self.buffer[:self.size] + [None] * (new_capacity - self.size)
+        self.capacity = new_capacity
+        self.resize_count += 1
+
+
+class HysteresisArray:
+    def __init__(self):
+        self.capacity = 1
+        self.size = 0
+        self.buffer = [None] * self.capacity
+        self.resize_count = 0
+
+    def push(self, value) -> None:
+        if self.size == self.capacity:
+            self._resize(self.capacity * 2)
+        self.buffer[self.size] = value
+        self.size += 1
+
+    def pop(self):
+        value = self.buffer[self.size - 1]
+        self.size -= 1
+        if self.capacity > 1 and self.size <= self.capacity // 4:
+            self._resize(max(2 * self.size, 1))
+        return value
+
+    def _resize(self, new_capacity: int) -> None:
+        self.buffer = self.buffer[:self.size] + [None] * (new_capacity - self.size)
+        self.capacity = new_capacity
+        self.resize_count += 1
+
+
+def oscillate(arr, rounds: int) -> None:
+    arr.push(0)
+    arr.push(0)
+    for _ in range(rounds):
+        arr.pop()
+        arr.push(0)
+
+
+naive = NaiveShrinkArray()
+oscillate(naive, 1000)
+print('naive resize_count:', naive.resize_count)      # 2001
+
+hysteresis = HysteresisArray()
+oscillate(hysteresis, 1000)
+print('hysteresis resize_count:', hysteresis.resize_count)  # 1
+```
+
+`NaiveShrinkArray` starts full at `size=2, capacity=2`; popping drops it to `size=1`, which already satisfies `size <= capacity // 2` (`1 <= 1`), triggering an immediate shrink to `capacity=1` — which is now full again, so the very next push immediately re-triggers a grow back to `capacity=2`. Every single round does one shrink and one grow, for roughly two resizes per round, exactly Section 5's thrashing failure mode. `HysteresisArray` never shrinks on that same pop, because `size <= capacity // 4` (`1 <= 0`) is false — the wider dead zone between the grow and shrink thresholds absorbs the oscillation entirely, so `resize_count` stays at essentially zero across the whole run instead of growing linearly with the number of rounds.
+
+</Solution>
+</WorkTask>

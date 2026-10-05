@@ -1,0 +1,305 @@
+---
+title: 'API Design Basics: <em>The Three Decisions You Can''t Easily Undo Later</em>'
+subtitle: Which protocol to use is a 30-minute choice; how you version, retry, and
+  paginate are 10-year architectural commitments — this lesson is about telling the
+  two kinds of decision apart before you ship either one.
+summary: This lesson covers the three API paradigms — REST, GraphQL, and gRPC — each
+  one earning its keep with a specific engineering tradeoff, and the N+1 query problem
+  a GraphQL server must solve with batching before it can run in production. It covers
+  idempotency keys as the mechanism that makes retrying a write safe, including the
+  exact atomicity bug that turns a crash mid-request into a double charge. It covers
+  cursor versus offset pagination and why the choice stops being cosmetic past a few
+  thousand rows, and closes with the longer-lived architectural commitments — versioning
+  strategy, rate limiting, and a standard error shape — that outlast whichever paradigm
+  a team picked at the start.
+phase: 04-api-design
+phaseTitle: Phase 04 — API Design
+order: 5
+lessonNumber: 1
+pubDate: '2026-10-04'
+hook: An API's protocol is a decision you can walk back in an afternoon. Its versioning
+  scheme is a decision today's choice will still be answering for a decade.
+hookCredit: — why Stripe is still serving API versions from 2011
+sourceUrl: https://hld.handbook.academy/curriculum/prerequisites/api-design-basics/
+---
+
+import Callout from "@florilex/tutorial-kit/components/Callout.astro";
+import Formula from "@florilex/tutorial-kit/components/Formula.astro";
+import WorkTask from "@florilex/tutorial-kit/components/WorkTask.astro";
+import Solution from "@florilex/tutorial-kit/components/Solution.astro";
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">1</span><h2 class="sec-title">REST: resources as nouns, HTTP verbs as the only vocabulary you need</h2></div>
+
+REST models everything a server exposes as a **resource** — a noun, addressed by a URL (`/users/42`, `/orders/123/line-items`) — and reuses a small, fixed set of HTTP verbs to operate on it, rather than inventing a new verb per action. `GET` reads without side effects and is **safe** (never changes state) and **idempotent** (repeating it any number of times gives the same result); `PUT` replaces a resource wholesale and is idempotent even though it does have side effects (sending the same `PUT` twice leaves the resource in the same final state); `DELETE` is idempotent for the same reason — deleting an already-deleted resource is still deleted; `POST` creates something new each time it's called and is neither safe nor idempotent, which is exactly why Section 4's idempotency keys exist to patch that gap back in; `PATCH` depends entirely on what the patch document says to do.
+
+| Verb | Safe | Idempotent | Typical use |
+|---|---|---|---|
+| `GET` | Yes | Yes | Read a resource |
+| `HEAD` | Yes | Yes | Read headers only |
+| `PUT` | No | Yes | Replace a resource |
+| `DELETE` | No | Yes | Remove a resource |
+| `POST` | No | No | Create, or any non-idempotent action |
+| `PATCH` | No | Depends | Partial update |
+
+Status codes partition the response the same deliberate way: `2xx` for success (`200 OK`, `201 Created` with a `Location` header pointing at the new resource, `204 No Content` for a success with nothing to return), `4xx` for a client-caused error (`400` malformed request, `401` missing credentials, `403` valid credentials but insufficient permission, `404` no such resource, `409` conflicts with current state, `422` well-formed but semantically invalid, `429` rate-limited — Section 6), and `5xx` for a server-caused one (`500` generic failure, `503` temporarily unavailable). REST is the right default for public, partner-facing, and browser-consumed CRUD APIs precisely because every HTTP client, cache, and proxy already understands this vocabulary with no API-specific documentation required.
+
+<Callout label="Careful" variant="warn">
+An endpoint like `POST /createUser` or `POST /orders/cancel` is REST in name only — hiding a verb inside the URL instead of using the HTTP verb defeats the entire point, since every piece of generic infrastructure (an HTTP cache, a load balancer's idempotent-retry logic, a proxy that assumes `GET` is safe to replay) stops being able to reason about the request at all. If a URL has a verb in it, it's RPC wearing a REST costume, not REST.
+</Callout>
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">2</span><h2 class="sec-title">GraphQL and the N+1 problem it ships with by default</h2></div>
+
+GraphQL replaces REST's fixed resource shapes with a **query language**: the client specifies exactly which fields it wants, in one request, and the server returns exactly that shape — nothing more, nothing less. This directly fixes the two complaints REST clients accumulate at scale: **over-fetching** (a mobile client getting a user's entire profile object just to show a username) and **under-fetching** (needing three separate round trips to assemble one screen, because the data spans three REST resources). A unified GraphQL schema can also **federate** across several backing microservices, giving every client one endpoint to query regardless of how many services actually answer it behind the scenes.
+
+The problem it ships with by default is the **N+1 query problem**: a query for 100 users, each with their own `orders` field resolved independently, triggers one query for the users and then, naively, one additional query per user to fetch that user's orders — 1 + 100 = 101 database round trips for a query that looked cheap on the page. The fix is **batching**: a `DataLoader` (Facebook's original implementation; Shopify's `graphql-batch` is the same idea) collects every `.load(id)` call made within one tick of the event loop into a single list, then issues exactly one bulk query for all of them at once, collapsing 101 round trips into 2 — one for the users, one bulk fetch for every order across all 100 users combined. Its per-request cache is just as load-bearing as the batching itself: without scoping that cache to a single request, one user's cached rows can leak into a different user's response.
+
+<Callout label="Careful" variant="warn">
+A DataLoader's cache must be created fresh per incoming request, never shared or reused across requests. A cache that outlives a single request is a cross-user data leak waiting to happen the moment two different users' queries touch overlapping IDs.
+</Callout>
+
+GraphQL is the right choice when genuinely diverse clients — a web app, two mobile platforms, and partner integrations — all need different shapes of the same underlying data; its costs are the batching requirement above (non-negotiable from day one, not an optimization to add later) and the fact that a single query's cost is much harder to predict and rate-limit than a REST endpoint's, since the client effectively picks how expensive its own request is.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">3</span><h2 class="sec-title">gRPC and Protocol Buffers: the contract-first choice for services you control on both ends</h2></div>
+
+gRPC is **contract-first**: a `.proto` file defines every message and every RPC method once, and a compiler generates typed client and server stubs in 10+ languages from that single source of truth — a type mismatch between a service and its caller becomes a compile-time error instead of a production incident. It runs over **HTTP/2** and serializes with binary **Protocol Buffers** rather than JSON, producing payloads roughly a third the size of the equivalent JSON and measured throughput gains of 15-40% at light load, climbing toward an order of magnitude at large payloads, purely from skipping text parsing and shrinking the bytes actually sent.
+
+It supports four RPC shapes beyond the simple request-response: **unary** (one request, one response — the REST-equivalent default), **server streaming** (one request, a stream of responses), **client streaming** (a stream of requests, one response), and **bidirectional streaming** (both sides stream independently, with message order preserved within each stream). That streaming flexibility, plus strict typed contracts, is exactly why gRPC is the default choice for internal service-to-service calls where the same team controls both the client and the server — there's no public-API audience to keep backward-compatible, so the contract can evolve as fast as the proto files do.
+
+<Callout label="Careful" variant="warn">
+gRPC's HTTP/2 connections are long-lived single TCP streams, which means a naive L4 (connection-level) load balancer pins every RPC on that connection to whichever backend pod it first connected to — one pod can end up starved while others sit idle, with no amount of request volume ever rebalancing it. The fix is L7 (request-level) load balancing via a proxy that understands individual gRPC calls rather than raw TCP connections; a service mesh like Linkerd adds under 1ms of p99 latency and under 10MB of resident memory per proxy to get this right, a small, measurable cost against the alternative of silent, permanent load imbalance.
+</Callout>
+
+The common production pattern threads all three paradigms together rather than picking exactly one: gRPC between internal services that both the frontend and backend team control, REST or GraphQL at the public edge where external clients live, and a translation gateway in between converting one into the other — paradigm choice doesn't have to be a single, repo-wide decision.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">4</span><h2 class="sec-title">Idempotency keys: making a retry safe, and the one way to get it wrong</h2></div>
+
+`POST` isn't idempotent (Section 1), which is a real problem the moment a network is involved: a client sends a payment request, the server charges the card and starts writing a response, the connection drops before that response arrives, and the client — correctly, by REST's own rules — has no way to know whether to retry. **Idempotency keys** close this gap: the client generates a unique token (a UUID) once per logical operation and sends it on an `Idempotency-Key` header; the server, before doing anything else, checks whether it has already seen that exact key. If it has, it returns the cached response from the first attempt — exactly, no new charge — instead of re-executing the side effect.
+
+<Formula name="The one invariant that makes this correct">
+(side effect) and (cached response) commit together, in one transaction, or neither commits at all
+</Formula>
+
+<Callout label="Careful" variant="warn">
+If the side effect and the cached-response write aren't part of the same atomic transaction, there's a crash window between them: the card gets charged, then the process dies before the response gets cached. The client, having received nothing, retries with the same key, finds no cached response (since none was ever written), and the server charges the card a second time. The key only protects against a double charge if claiming it and performing the side effect are inseparable — protecting the retry path while leaving a gap on the original path doesn't actually prevent the bug it exists to prevent.
+</Callout>
+
+Stripe's implementation is the reference case: keys are scoped per API key, and under its original `v1` API a key and its cached response expire after 24 hours, while its newer `v2` API extends that window to 30 days; a retried request whose parameters don't match the original call under the same key is rejected outright rather than silently served the wrong cached response. Idempotency keys matter most exactly where Section 1's idempotent-verb guarantee doesn't already cover you — `POST`-based writes with a real-world side effect: charging money, sending an email, provisioning a resource.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">5</span><h2 class="sec-title">Pagination: why offset breaks exactly when a table gets interesting</h2></div>
+
+**Offset pagination** (`?limit=20&offset=100`) is the obvious first implementation, and the one that breaks first: the database still has to scan and discard every row before the offset just to find where the requested page starts, so page 5,000 at `limit=20` reads and discards 100,000 rows before returning 20 of them — cost that grows linearly with how deep into the table a client pages, not with how much data they actually get back. It's also unsafe under concurrent writes: if a row is inserted or deleted ahead of the current offset while a client is paging through, rows can shift underneath them, producing duplicates or silently skipped rows between one page request and the next. Slack's own pagination started this way and held up fine at a few hundred records before breaking as datasets grew into the hundreds of thousands.
+
+**Cursor pagination** fixes both problems by encoding the last row seen — its sort key — into an opaque token, and asking for the next page with a query like `WHERE (created_at, id) > cursor LIMIT 20`, which an index can satisfy with a direct seek rather than a scan-and-discard. Cost stays flat regardless of how deep a client pages, because the database jumps straight to the right place in the index every time. Stripe's object-based `starting_after`/`ending_before` cursors are a production example of exactly this pattern.
+
+<Callout label="Careful" variant="warn">
+The cursor has to stay genuinely opaque to the client — Google's own API design guidance (AIP-158) makes this explicit. The moment a client starts decoding a cursor's internal structure, even just to inspect it rather than construct one, that internal structure has become part of the API's real surface whether or not it was ever documented, and changing the underlying sort key or encoding later becomes a breaking change for anyone who peeked.
+</Callout>
+
+The practical rule of thumb: reach for cursor pagination by default past roughly 10,000 rows in a table that changes over time, and keep offset pagination only for small, bounded, close-to-static datasets — an admin screen listing a few hundred feature flags, say — where its one real advantage, letting a user jump straight to an arbitrary page number, is worth more than its scaling cost, because that cost never materializes at that size.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">6</span><h2 class="sec-title">Versioning, rate limiting, and a standard shape for errors: the decisions that outlive the paradigm</h2></div>
+
+API versioning can live in three places: the URL path (`/v1/users/42` — simple, visible, and the easiest for a partner hitting the API with raw `curl` to reason about), a custom header (`API-Version: 2` — keeps URLs stable but requires every caller to set a header correctly, invisible to casual inspection), or a date pinned to an account at signup, rolling that account onto whichever API shape was current the day it signed up. The costly mistake is an integer major version baked straight into the URL path: every breaking `/v2/` release leaves every existing integration pointed at `/v1/` stuck there until each one individually rewrites its own URLs — exactly the kind of decade-long drag this lesson's hook warns about.
+
+Stripe's history is the clearest illustration available: between 2011 and 2017 it accumulated roughly 100 breaking changes without ever forcing an existing integration to upgrade, by applying small version-change transforms backward from the current API shape down to whatever version a given API key is still pinned to. Since late 2024 it has formalized this into named major releases on a flora-themed cadence — Acacia, then Basil, then Clover, then Dahlia — roughly twice a year, each one introducing that release's breaking changes once and then only accepting additive, non-breaking monthly updates for the rest of that release's life, so an integration can freely take monthly updates without ever re-reading a changelog for breakage. Shopify runs a related but simpler scheme: quarterly, date-named versions (`2026-04`, say) each supported for 12 months with a 9-month overlap against its predecessor, giving integrators a full three-quarter window to migrate off a version before it's retired.
+
+**Rate limiting** is almost universally implemented as a **token bucket**: a bucket refills at a steady rate `R` up to some burst capacity `B`, and every request consumes one token, which lets a client burst up to `B` requests instantly while still being capped to `R` requests per unit time on average. A well-behaved API always responds to an exhausted bucket with `429 Too Many Requests` and a `Retry-After` header telling the client exactly when to come back, and publishes its current budget via a header like `x-ratelimit-remaining` so a well-behaved client can self-throttle before ever hitting the limit at all — GitHub's GraphQL API, for instance, grants 5,000 points per hour per user and bills more complex queries more points against that same budget.
+
+<Callout label="Careful" variant="warn">
+A `429` with no `Retry-After` header invites the worst possible client behavior: a tight retry loop that hammers the same exhausted endpoint immediately, amplifying the overload instead of relieving it. The header isn't a nicety; it's the one piece of information that turns an overloaded server's distress signal into something a client can actually act on correctly.
+</Callout>
+
+Finally, error shape benefits from the same standardization as everything else here: RFC 9457 defines a JSON body with exactly five fields — `type` (a URI identifying the kind of problem), `title` (a short, stable, human-readable summary of that type), `status` (a copy of the HTTP status code), `detail` (what went wrong in this specific instance), and `instance` (a URI identifying this specific occurrence, useful for deduplicating repeated client-side error reports). A client can dispatch on `type` programmatically, log `detail` for a human, and use `instance` to recognize a repeat of an error it already handled — one shape, reused by every endpoint, instead of each one inventing its own.
+
+</section>
+
+<WorkTask label="Task 1 · Implement" title="Reproduce the N+1 problem, then fix it with a batching loader">
+
+Implement a tiny `OrdersDB` that tracks how many queries it serves, and a `BatchingLoader` on top of it:
+
+```python
+class OrdersDB:
+    def __init__(self, orders_by_user: dict[int, list[str]]):
+        self.orders_by_user = orders_by_user
+        self.query_count = 0
+
+    def get_orders(self, user_id: int) -> list[str]:
+        ...  # one query per call -- increments query_count by 1
+
+    def get_orders_batch(self, user_ids: list[int]) -> dict[int, list[str]]:
+        ...  # one query for the whole batch -- increments query_count by 1, regardless of len(user_ids)
+
+class BatchingLoader:
+    def __init__(self, db: OrdersDB):
+        ...
+
+    def load(self, user_id: int) -> None:
+        ...  # queue a user_id, don't query yet
+
+    def dispatch(self) -> dict[int, list[str]]:
+        ...  # issue exactly one db.get_orders_batch call for everything queued, then clear the queue
+```
+
+For 100 users: (a) call `db.get_orders(uid)` in a loop and report `db.query_count` afterward, and (b) queue all 100 through `BatchingLoader.load()` and call `dispatch()` once, reporting `db.query_count` afterward. Confirm the two query counts, and explain in 1-2 sentences why this is the same fix Section 2's `DataLoader` applies in a real GraphQL server.
+
+<Solution>
+
+```python
+class OrdersDB:
+    def __init__(self, orders_by_user: dict[int, list[str]]):
+        self.orders_by_user = orders_by_user
+        self.query_count = 0
+
+    def get_orders(self, user_id: int) -> list[str]:
+        self.query_count += 1
+        return self.orders_by_user.get(user_id, [])
+
+    def get_orders_batch(self, user_ids: list[int]) -> dict[int, list[str]]:
+        self.query_count += 1
+        return {uid: self.orders_by_user.get(uid, []) for uid in user_ids}
+
+
+class BatchingLoader:
+    def __init__(self, db: OrdersDB):
+        self.db = db
+        self.queue: list[int] = []
+
+    def load(self, user_id: int) -> None:
+        self.queue.append(user_id)
+
+    def dispatch(self) -> dict[int, list[str]]:
+        result = self.db.get_orders_batch(self.queue)
+        self.queue = []
+        return result
+
+
+orders_by_user = {uid: [f'order-{uid}-a', f'order-{uid}-b'] for uid in range(100)}
+
+# (a) naive: one query per user
+db_naive = OrdersDB(orders_by_user)
+for uid in range(100):
+    db_naive.get_orders(uid)
+print('naive query_count:', db_naive.query_count)  # 100
+
+# (b) batched: one query total
+db_batched = OrdersDB(orders_by_user)
+loader = BatchingLoader(db_batched)
+for uid in range(100):
+    loader.load(uid)
+loader.dispatch()
+print('batched query_count:', db_batched.query_count)  # 1
+```
+
+The naive loop issues one query the instant each resolver runs, exactly like a GraphQL server resolving each user's `orders` field independently; the loader instead defers every `load()` call, collecting all 100 requested IDs before issuing a single `get_orders_batch` call once `dispatch()` runs. A real `DataLoader` does the identical thing automatically, flushing its queue at the end of one event-loop tick instead of needing an explicit `dispatch()` call, but the underlying trick — collect first, query once — is exactly this.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 2 · Implement" title="The atomicity bug that turns one retried charge into two">
+
+Implement two versions of a toy payment processor sharing the same `ledger` (the real-world side effect) and `idempotency_store` (the cached-response map):
+
+```python
+class PaymentProcessor:
+    def __init__(self):
+        self.ledger: list[float] = []
+        self.idempotency_store: dict[str, float] = {}
+
+    def charge_naive(self, key: str, amount: float, simulate_crash: bool = False) -> float:
+        ...  # charges first, caches the response second -- the bug from Section 4
+
+    def charge_atomic(self, key: str, amount: float, simulate_crash: bool = False) -> float:
+        ...  # treats the charge and the cache write as inseparable
+```
+
+`simulate_crash=True` should make the method raise partway through, standing in for a process dying mid-request. For each method, run this sequence: call it once with `simulate_crash=True` (catch the exception), then call it again with the same key and `simulate_crash=False`. Report `len(processor.ledger)` after both calls for each version, and explain which one double-charges and why, tying it back to Section 4's invariant.
+
+<Solution>
+
+```python
+class PaymentProcessor:
+    def __init__(self):
+        self.ledger: list[float] = []
+        self.idempotency_store: dict[str, float] = {}
+
+    def charge_naive(self, key: str, amount: float, simulate_crash: bool = False) -> float:
+        if key in self.idempotency_store:
+            return self.idempotency_store[key]
+        self.ledger.append(amount)            # side effect happens first
+        if simulate_crash:
+            raise RuntimeError('crashed after charging, before caching the response')
+        self.idempotency_store[key] = amount  # cached response written second
+        return amount
+
+    def charge_atomic(self, key: str, amount: float, simulate_crash: bool = False) -> float:
+        if key in self.idempotency_store:
+            return self.idempotency_store[key]
+        if simulate_crash:
+            raise RuntimeError('crashed before the charge-and-cache unit committed')
+        self.ledger.append(amount)            # both lines below this point either
+        self.idempotency_store[key] = amount  # both run, or neither does
+        return amount
+
+
+naive = PaymentProcessor()
+try:
+    naive.charge_naive('key-1', 100.0, simulate_crash=True)
+except RuntimeError:
+    pass
+naive.charge_naive('key-1', 100.0)
+print('naive ledger:', naive.ledger)          # [100.0, 100.0] -- charged twice
+
+atomic = PaymentProcessor()
+try:
+    atomic.charge_atomic('key-1', 100.0, simulate_crash=True)
+except RuntimeError:
+    pass
+atomic.charge_atomic('key-1', 100.0)
+print('atomic ledger:', atomic.ledger)        # [100.0] -- charged once
+```
+
+`charge_naive` appends to the ledger before the crash point, so the first (crashing) call already charged the card even though the caller never saw a response; the retried call finds no cached entry for the key (since that line never ran) and charges again, landing two entries in the ledger for one logical payment. `charge_atomic` moves the crash check to before the side effect, so a crash there means nothing committed at all — no charge, no cache entry — and the retry is a clean first attempt rather than a double charge. A real system enforces this with one database transaction wrapping both the side effect and the idempotency-store write, rather than by ordering two Python statements, but the failure mode it closes is exactly this one.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 3 · Classify" title="Pick the right technique for each scenario">
+
+For each scenario, name the single best-fitting technique from this lesson and justify it against at least one alternative:
+
+(a) A public API for third-party partners who frequently test and debug endpoints by hand with `curl`, and occasionally need a breaking change rolled out without silently affecting everyone overnight.
+(b) A product with a web app, two different native mobile apps, and a partner integration, each needing a different shape of the same underlying catalog data, with the mobile apps especially sensitive to unnecessary payload size.
+(c) A `POST /payments/charge` endpoint called over a flaky mobile network, where the client can't tell whether a timed-out request actually succeeded server-side.
+(d) An internal admin tool listing a few hundred feature flags, where admins expect to type a page number and jump straight to it.
+(e) Thirty internal microservices, all owned by the same platform team, calling each other constantly and needing both strict typed contracts and the ability to stream results incrementally.
+
+<Solution>
+
+**(a) URL-path versioning (`/v1/...`) on a REST API.** Sections 1 and 6 — curl-using partners benefit from a version that's visible directly in the URL with nothing to remember to set, and a path bump gives the team an explicit place to introduce a breaking change without touching integrations still pinned to the old path; header-based versioning is cleaner for programmatic clients but harder for a partner poking at the API by hand.
+
+**(b) GraphQL with a DataLoader.** Section 2 — three-plus genuinely different client shapes needing different fields from the same underlying data is exactly the over/under-fetching problem GraphQL exists to solve, and mobile payload-size sensitivity is a second, independent reason to let clients request only the fields they need; REST here would mean either a bespoke endpoint per client shape or shipping every client the same over-fetched payload.
+
+**(c) Idempotency keys, with the charge and the cached response committed atomically.** Section 4 — this is precisely the scenario that motivates the whole mechanism: a client that can't tell if its `POST` succeeded needs to retry safely, and the atomicity requirement is what prevents that safe retry from becoming a double charge.
+
+**(d) Offset pagination.** Section 5 — a few hundred rows sits well under the roughly 10,000-row threshold where offset's scan cost becomes a real problem, and the one thing offset does better than cursor pagination — jumping straight to an arbitrary page number — is the actual UX requirement here; cursor pagination would be more future-proof at scale but can't serve "jump to page 7" at all.
+
+**(e) gRPC with Protocol Buffers.** Section 3 — the same team on both ends of every call removes any need for REST's public-facing backward-compatibility story, strict typed contracts generated from one `.proto` source eliminate an entire class of integration bugs between services, and gRPC's streaming modes are a native fit for incremental results in a way REST has no equivalent for.
+
+</Solution>
+</WorkTask>

@@ -1,0 +1,255 @@
+---
+title: 'Bayes'' Theorem: <em>What You Already Believed, Updated by What You Just Saw</em>'
+subtitle: A single rearrangement of conditional probability turns out to be the exact
+  mechanism behind spam filters, L2 regularization, and the probability number on
+  an A/B test dashboard.
+summary: 'This lesson derives Bayes'' theorem from the symmetry of joint probability,
+  then walks through why a 99%-accurate medical test can still mean you''re probably
+  healthy, the base-rate trap that shows up anywhere a classifier faces a rare positive
+  class. It builds a Naive Bayes text classifier on top of the categorical distribution
+  from the previous lesson, using Laplace smoothing and log-space computation to keep
+  it numerically solid. It then derives the exact point where a Bayesian prior becomes
+  a familiar ML object: a Gaussian prior on model weights turns maximum a posteriori
+  estimation into L2 regularization, term for term. It closes with conjugate priors,
+  the Beta-Binomial pair that lets an A/B test update its belief about a conversion
+  rate one visitor at a time and report a direct probability that one variant beats
+  another.'
+phase: 01-math-foundations
+phaseTitle: Phase 01 — Math Foundations
+order: 7
+lessonNumber: 7
+pubDate: '2026-10-04'
+hook: A test being 99% accurate and a positive result meaning you're 99% likely to
+  be sick are two completely different claims — confusing them is the single most
+  common probability mistake in applied ML.
+hookCredit: — the base-rate fallacy, and why thresholds need priors
+sourceUrl: https://aiengineeringfromscratch.com/lesson?path=phases%2F01-math-foundations%2F07-bayes-theorem
+---
+
+import Callout from "@florilex/tutorial-kit/components/Callout.astro";
+import Formula from "@florilex/tutorial-kit/components/Formula.astro";
+import WorkTask from "@florilex/tutorial-kit/components/WorkTask.astro";
+import Solution from "@florilex/tutorial-kit/components/Solution.astro";
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">1</span><h2 class="sec-title">Conditional probability's hidden symmetry is Bayes' theorem</h2></div>
+
+Start from the definition of conditional probability, written both ways around for the same joint event: `P(A|B)·P(B) = P(A, B) = P(B|A)·P(A)`. Both sides compute the same joint probability — `A` and `B` both happening — just by conditioning in opposite orders, and that symmetry is the entire derivation. Setting the two expressions for `P(A, B)` equal to each other and dividing through by `P(B)` gives Bayes' theorem directly, with no extra machinery required.
+
+<Formula name="Bayes' Theorem">
+P(A|B) = P(B|A)·P(A) / P(B)
+</Formula>
+
+Each of the four terms has a name worth knowing, because the names are how this equation gets discussed everywhere from a stats textbook to a paper's appendix: `P(A|B)` is the **posterior** — what you believe about `A` after seeing evidence `B`; `P(B|A)` is the **likelihood** — how probable the evidence is, assuming a particular hypothesis about `A`; `P(A)` is the **prior** — what you believed about `A` before seeing any evidence at all; and `P(B)` is the **evidence** (or marginal), the total probability of seeing `B` under every possible value of `A`, which usually has to be expanded via the law of total probability rather than read off directly. Four quantities, one equation, and the rest of this lesson is various instantiations of which of the four you're trying to compute from the other three.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">2</span><h2 class="sec-title">The base-rate trap: why a 99%-accurate test can still mean you're probably fine</h2></div>
+
+Take a disease that affects 1 in 10,000 people (`prior = 0.0001`), and a test with 99% sensitivity (`P(positive|disease) = 0.99`) and 99% specificity (`P(negative|no disease) = 0.99`, so the false-positive rate is `0.01`). The evidence term needs the law of total probability, splitting over both ways a positive result can happen: `P(positive) = P(positive|disease)·P(disease) + P(positive|no disease)·P(no disease) = 0.99·0.0001 + 0.01·0.9999 ≈ 0.0101`. Plugging that into Bayes' theorem: `P(disease|positive) = (0.99·0.0001) / 0.0101 ≈ 0.0098` — about 1%, not 99%.
+
+<Callout label="Careful" variant="warn">
+"99% accurate" describes the likelihood terms — `P(positive|disease)` and `P(negative|no disease)` — not the posterior you actually care about, `P(disease|positive)`. Whenever the prior is small, the overwhelming majority of positives come from the enormous healthy population's small false-positive rate, not from the tiny diseased population's high true-positive rate, no matter how impressive the test's own accuracy number sounds in isolation.
+</Callout>
+
+This is exactly why precision collapses on any classifier facing a rare positive class — fraud detection, anomaly detection, a rare disease, a rare defect on a production line. Precision *is* this posterior, `P(actual positive | predicted positive)`, and it stays dominated by the false-positive rate applied to the huge majority class even when sensitivity and specificity both look excellent on paper.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">3</span><h2 class="sec-title">Naive Bayes: the categorical distribution's parameters, learned from data with a conditional-independence shortcut</h2></div>
+
+The previous lesson's categorical distribution needs its parameters — one probability per class — estimated from somewhere. Bayes' theorem gives a direct route: to classify a feature vector `x`, pick the class `c` maximizing `P(c|x)`, and since `P(c|x) ≈ P(x|c)·P(c) / P(x)` with the same `P(x)` denominator for every candidate class, comparing numerators alone is enough — `P(x)` can simply be dropped from the argmax.
+
+<Formula name="Naive Bayes classification rule">
+argmax_c [ P(c) · ∏ᵢ P(xᵢ|c) ]
+</Formula>
+
+The hard part is `P(x|c)` when `x` is a full feature vector — a word-count vector over a 50,000-word vocabulary has a joint distribution with far too many parameters to estimate from any realistic training set. Naive Bayes's one assumption, the one the name is pointing at, is that every feature is conditionally independent of every other feature given the class: `P(x|c) = ∏ᵢ P(xᵢ|c)`, replacing one impossible joint estimation problem with many trivial single-word ones. It's "naive" because words in real text are obviously correlated, but the approximation still orders classes correctly often enough to be a genuinely strong baseline.
+
+For a bag-of-words text classifier, `P(word|c)` is estimated as `count(word, c) / total_words_in_c` from training data. A word that never appeared in class `c`'s training documents gets probability exactly `0`, which zeroes out the *entire* product the moment that one word shows up in a new document — no matter how strong every other word's evidence is. **Laplace (add-one) smoothing** fixes this by adding `1` to every count and the vocabulary size `|V|` to every denominator: `P(word|c) = (count(word, c) + 1) / (total_words_in_c + |V|)`, guaranteeing every probability stays strictly positive.
+
+Multiplying together probabilities for every word in a document underflows floating point long before any single factor would — the identical failure mode the previous lesson's log-sum-exp trick solved for softmax. Naive Bayes is computed in log-space for exactly that reason: `log P(c|x) ∝ log P(c) + Σᵢ log P(xᵢ|c)` turns an underflowing product into a well-behaved sum, and argmax over the sum gives the identical answer argmax over the product would, without ever computing a tiny floating-point product directly.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">4</span><h2 class="sec-title">Maximum likelihood vs. maximum a posteriori: the exact spot a prior becomes a regularizer</h2></div>
+
+**Maximum likelihood estimation (MLE)** picks parameters `θ` maximizing `P(data|θ)` — the likelihood term of Bayes' theorem, alone, with no prior term at all. The previous lesson's closing point was that cross-entropy loss is exactly the negative log-likelihood of the categorical or Bernoulli distribution a model's own output parameterizes; minimizing cross-entropy over a training set, named plainly, *is* maximum likelihood estimation. MLE implicitly treats every candidate `θ` as equally plausible before seeing any data, because it never multiplies in a prior to say otherwise.
+
+**Maximum a posteriori (MAP) estimation** maximizes the *full* posterior instead: `P(θ|data) ∝ P(data|θ)·P(θ)`, likelihood times prior, not likelihood alone. Taking logs turns that product into a sum: `log P(θ|data) = log P(data|θ) + log P(θ) + const`. Choose a concrete prior for a model's weights — zero-mean Gaussian, `P(θ) ∝ exp(-θ² / (2σ²))` for each weight independently — and `log P(θ) = -Σᵢθᵢ² / (2σ²) + const`.
+
+<Formula name="MAP objective ≡ L2-regularized loss">
+argmin_θ [ NLL(θ) + (1 / (2σ²)) · Σᵢ θᵢ² ]
+</Formula>
+
+That second term, dropped straight out of a Gaussian-prior assumption on the weights, is exactly the L2 (ridge) penalty, with regularization strength `λ = 1/σ²` — a smaller prior variance (a stronger belief that weights should sit near zero) is a *larger* `λ` (a stronger penalty); same knob, two names, two vocabularies. Every time an optimizer's `weight_decay` argument or an explicit L2 term gets added to a loss function, that's MAP estimation under a zero-mean Gaussian weight prior, whether or not Bayes' theorem ever gets written down to justify it.
+
+</section>
+
+<section class="lesson">
+<div class="sec-head"><span class="sec-num">5</span><h2 class="sec-title">Conjugate priors and sequential updating: Beta-Binomial, and reading an A/B test as a posterior instead of a p-value</h2></div>
+
+A **conjugate prior** is a prior distribution chosen so that, after combining with a given likelihood through Bayes' theorem, the posterior lands in the *same family* as the prior — closed-form, with no numerical integration ever required. The **Beta distribution** `Beta(α, β)` is the conjugate prior for a **Binomial** likelihood, which is exactly the right pairing for modeling an unknown conversion rate `p`: observe `s` successes and `f` failures out of `s + f` trials, and `P(data|p) ∝ p^s·(1-p)^f`. Multiplying that likelihood by a `Beta(α, β)` prior, whose density is proportional to `p^(α-1)·(1-p)^(β-1)`, gives a posterior proportional to `p^(α+s-1)·(1-p)^(β+f-1)` — precisely the kernel of `Beta(α+s, β+f)`.
+
+<Formula name="Beta-Binomial posterior update">
+Beta(α, β) prior + (s successes, f failures) → Beta(α + s, β + f) posterior
+</Formula>
+
+Because the posterior after one batch of data is just another Beta distribution, it can immediately serve as the prior for the next batch — updating after every single visitor, once a day, or in one lump sum at the end all land on the exact same final `(α, β)`, as long as the total successes and failures match. This is the mechanism under every "Bayesian A/B test" dashboard: start both control and treatment at some weak, uninformative prior like `Beta(1, 1)` — the uniform distribution from two lessons back, expressed as a Beta — update each independently with its own observed conversions, and at any point draw a large number of samples from each posterior to ask directly "what fraction of the time does treatment's sampled rate exceed control's?" That fraction *is* `P(treatment > control)`, a real probability statement ready to act on ("ship if this exceeds 95%"), in contrast to a frequentist p-value, which only answers a narrower question: how surprising this data would look if there were no true difference at all.
+
+</section>
+
+<WorkTask label="Task 1 · Implement" title="The base-rate trap, computed exactly">
+
+Implement `bayes_posterior(prior, sensitivity, specificity)` returning `P(disease | positive test)`, using the law of total probability to expand the evidence term, where `sensitivity = P(positive|disease)` and `specificity = P(negative|no disease)` (so the false-positive rate is `1 - specificity`). Run it with a fixed `sensitivity = specificity = 0.99` across three priors: `1/10_000`, `1/100`, and `1/2`. Report all three posteriors and explain in 2-3 sentences why the same "99%-accurate" test produces such wildly different posteriors.
+
+<Solution>
+
+```python
+def bayes_posterior(prior: float, sensitivity: float, specificity: float) -> float:
+    false_positive_rate = 1 - specificity
+    p_positive_given_disease = sensitivity
+    p_positive_given_no_disease = false_positive_rate
+    evidence = p_positive_given_disease * prior + p_positive_given_no_disease * (1 - prior)
+    return (p_positive_given_disease * prior) / evidence
+
+for prior in [1 / 10_000, 1 / 100, 1 / 2]:
+    print(prior, bayes_posterior(prior, sensitivity=0.99, specificity=0.99))
+```
+
+```text
+0.0001  ->  0.0098   (~1%)
+0.01    ->  0.5000   (50%)
+0.5     ->  0.9900   (99%)
+```
+
+The test's own accuracy (`sensitivity = specificity = 0.99`) never changes across these three rows — only the prior does. At `prior = 1/10_000`, almost everyone tested is healthy, so the 1% false-positive rate applied to that enormous healthy population produces more false positives than true positives drawn from the tiny diseased population, collapsing the posterior to ~1%. At `prior = 1/2`, the two populations are equal-sized, so the 99%/1% asymmetry in the likelihood terms dominates and the posterior tracks the test's own accuracy almost exactly — exactly the base-rate trap: "accurate" describes the likelihood, not the posterior you actually care about.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 2 · Implement" title="A Naive Bayes spam classifier, smoothed and in log-space">
+
+Implement `fit(documents: list[str], labels: list[str])` returning `(class_log_priors, word_log_probs, vocab)`, and `predict(doc: str, class_log_priors, word_log_probs, vocab)` returning the predicted label — a bag-of-words Naive Bayes classifier using Laplace smoothing and log-space scoring throughout. Train it on:
+
+```python
+spam = ["win money now", "free cash prize", "claim your free prize"]
+ham = ["lets meet for lunch", "can you send the report", "meeting moved to friday"]
+documents = spam + ham
+labels = ["spam"] * len(spam) + ["ham"] * len(ham)
+```
+
+Then classify `"free money for you"` and `"send me the report please"`, and explain the predictions in terms of which words carried the evidence.
+
+<Solution>
+
+```python
+import math
+from collections import Counter
+
+def fit(documents: list[str], labels: list[str]):
+    vocab: set[str] = set()
+    words_by_class: dict[str, list[str]] = {}
+    for doc, label in zip(documents, labels):
+        words = doc.lower().split()
+        vocab.update(words)
+        words_by_class.setdefault(label, []).extend(words)
+
+    n_docs = len(documents)
+    class_log_priors = {
+        label: math.log(sum(1 for l in labels if l == label) / n_docs)
+        for label in set(labels)
+    }
+
+    vocab_size = len(vocab)
+    word_log_probs: dict[str, dict[str, float]] = {}
+    for label, words in words_by_class.items():
+        counts = Counter(words)
+        total = len(words)
+        word_log_probs[label] = {
+            word: math.log((counts.get(word, 0) + 1) / (total + vocab_size))
+            for word in vocab
+        }
+    return class_log_priors, word_log_probs, vocab
+
+def predict(doc: str, class_log_priors, word_log_probs, vocab) -> str:
+    words = doc.lower().split()
+    best_label, best_score = None, float("-inf")
+    for label, log_prior in class_log_priors.items():
+        score = log_prior
+        for word in words:
+            if word in vocab:
+                score += word_log_probs[label][word]
+        if score > best_score:
+            best_label, best_score = label, score
+    return best_label
+```
+
+```python
+spam = ["win money now", "free cash prize", "claim your free prize"]
+ham = ["lets meet for lunch", "can you send the report", "meeting moved to friday"]
+documents = spam + ham
+labels = ["spam"] * len(spam) + ["ham"] * len(ham)
+
+class_log_priors, word_log_probs, vocab = fit(documents, labels)
+print(predict("free money for you", class_log_priors, word_log_probs, vocab))        # spam
+print(predict("send me the report please", class_log_priors, word_log_probs, vocab)) # ham
+```
+
+`"free"` and `"money"` both appear only in the spam training documents, so the smoothed `P(word|spam)` for each is noticeably higher than the smoothed `P(word|ham)`, and that difference compounds across both words in the log-space sum enough to overcome everything else. `"report"` and `"send"` appear only in the ham documents, pulling the second sentence toward ham for the same reason. Words never seen in training at all (`"for"`, `"you"`, `"me"`, `"please"`) are simply skipped rather than smoothed, since Laplace smoothing only guarantees a nonzero probability for words that are at least in the known vocabulary — a true out-of-vocabulary word needs a separate fallback, which this toy version doesn't implement.
+
+</Solution>
+</WorkTask>
+
+<WorkTask label="Task 3 · Simulate" title="Sequential Beta-Binomial updating for an A/B test">
+
+Implement `beta_update(alpha, beta, successes, failures)` returning the updated `(alpha, beta)`. Starting both control and treatment from an uninformative `Beta(1, 1)` prior, simulate 5 days of an A/B test where each day sends 500 visitors to each variant, control's true conversion rate is `5%`, and treatment's true rate is `6%` (use a seeded `numpy` RNG's `.binomial()` to generate each day's conversion counts, and update the corresponding Beta posterior after each day). After the 5 days, draw 100,000 samples from each final Beta posterior (`.beta()`) and estimate `P(treatment > control)` directly. Report both posterior means and that final probability.
+
+<Solution>
+
+```python
+import numpy as np
+
+def beta_update(alpha: float, beta: float, successes: int, failures: int) -> tuple[float, float]:
+    return alpha + successes, beta + failures
+
+rng = np.random.default_rng(0)
+
+control_alpha, control_beta = 1.0, 1.0
+treatment_alpha, treatment_beta = 1.0, 1.0
+visitors_per_day = 500
+
+for day in range(5):
+    control_conversions = rng.binomial(visitors_per_day, 0.05)
+    treatment_conversions = rng.binomial(visitors_per_day, 0.06)
+
+    control_alpha, control_beta = beta_update(
+        control_alpha, control_beta, control_conversions, visitors_per_day - control_conversions
+    )
+    treatment_alpha, treatment_beta = beta_update(
+        treatment_alpha, treatment_beta, treatment_conversions, visitors_per_day - treatment_conversions
+    )
+
+control_samples = rng.beta(control_alpha, control_beta, size=100_000)
+treatment_samples = rng.beta(treatment_alpha, treatment_beta, size=100_000)
+
+print("control posterior mean:", control_alpha / (control_alpha + control_beta))
+print("treatment posterior mean:", treatment_alpha / (treatment_alpha + treatment_beta))
+print("P(treatment > control):", (treatment_samples > control_samples).mean())
+```
+
+Typical output (exact numbers vary with the seed, but the pattern holds):
+
+```text
+control posterior mean:   ~0.051
+treatment posterior mean: ~0.063
+P(treatment > control):   ~0.93
+```
+
+After 2,500 visitors per variant the two posteriors have narrowed enough to mostly separate but still overlap some — exactly why the answer is "93% probability treatment is better," a real probability to act on ("ship if this clears 95%"), rather than a binary significant/not-significant verdict. Because Beta-Binomial updates are associative, running all 5 days as one lump update — `beta_update(1, 1, total_conversions, total_failures)` — lands on the exact same final `(alpha, beta)` as updating day by day.
+
+</Solution>
+</WorkTask>
